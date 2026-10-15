@@ -14,6 +14,11 @@ on this repository. Include steps to reproduce and the affected version. You sho
 - Secrets are never returned by the API. The UI only ever sees a mask or the `env:` reference name.
 - Sessions are HS256 JWTs in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` with `NV_COOKIE_SECURE=true`).
 - Login attempts are rate limited per client IP.
+- Optional TOTP MFA: ±1 step drift window, replay protection, single-use SHA-256-hashed recovery codes,
+  password + code re-authentication for MFA changes, and all other sessions revoked when MFA is turned on or off.
+  The half-login token issued after the password step only works on the MFA endpoint, for 5 minutes.
+- KeePass references (`kp:`) are resolved server-side at poll time. The API only ever lists entry paths and
+  field names, never values.
 - The WebSocket rejects cross-origin connections.
 - Strict security headers (CSP, frame denial, nosniff) are sent on every response.
 - The container runs as an unprivileged user with all Linux capabilities dropped and `no-new-privileges`.

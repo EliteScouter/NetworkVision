@@ -19,9 +19,10 @@ from ..collectors.ping import icmp_probe
 from ..config import get_settings
 from ..db import delete_in_chunks, sessionmaker, with_retry
 from ..models import Alert, Device, DeviceMetric, InterfaceMetric, LogEntry
-from ..security import decrypt_secrets, resolve_secret
+from ..security import SecretError, decrypt_secrets, resolve_secret
 from .alerts import engine
 from .bus import bus
+from .keepass import keepass
 from .logs import pipeline
 from .state import DeviceState, store
 
@@ -67,6 +68,7 @@ class Poller:
         self.log_watermark: dict[int, float] = {}
         self._wake: dict[int, asyncio.Event] = {}
         self._facts_hash: dict[int, str] = {}
+        self._kp_versions: dict[int, int] = {}
         self._housekeeping: list[asyncio.Task] = []
         self._dirty = asyncio.Event()
 
@@ -170,9 +172,24 @@ class Poller:
             ev.clear()
 
     async def poll_device(self, dev: Device) -> DeviceState:
+        kp_version = await asyncio.to_thread(keepass.check) if keepass.configured else 0
         collector = self.collectors.get(dev.id)
+        if collector is not None and self._kp_versions.get(dev.id) != kp_version:
+            # The .kdbx changed on disk: rebuild so rotated credentials take effect.
+            with contextlib.suppress(Exception):
+                await collector.close()
+            self.collectors.pop(dev.id, None)
+            collector = None
         if collector is None:
-            collector = self.collectors[dev.id] = make_collector(dev)
+            try:
+                collector = self.collectors[dev.id] = make_collector(dev)
+                self._kp_versions[dev.id] = kp_version
+            except SecretError as e:
+                st = store.ensure(dev)
+                st.mark_down(f"Credential reference failed: {e}")
+                await engine.process(st)
+                self._dirty.set()
+                return st
         t0 = time.perf_counter()
         snap = await run_collect(collector, dev)
         st = store.ensure(dev)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -13,12 +14,14 @@ from ..db import get_session
 from ..models import Device, DeviceMetric, InterfaceMetric
 from ..security import (
     SECRET_MASK,
+    SecretError,
     decrypt_secrets,
     encrypt_secrets,
     mask_secrets,
     require_user,
     resolve_secret,
 )
+from ..services.keepass import keepass
 from ..services.poller import poller, run_collect
 from ..services.state import store
 
@@ -91,6 +94,22 @@ def _row(d: Device) -> dict[str, Any]:
         "parent_id": d.parent_id, "external_id": d.external_id, "tags": d.tags or [], "location": d.location,
         "notes": d.notes, "last_seen": d.last_seen, "created_at": d.created_at,
     }
+
+
+@router.get("/keepass/status")
+async def keepass_status() -> dict:
+    return await asyncio.to_thread(keepass.status)
+
+
+@router.get("/keepass/entries")
+async def keepass_entries() -> dict:
+    """Entry paths and field names only - secret values never leave the server."""
+    if not keepass.configured:
+        raise HTTPException(404, "KeePass is not configured (NV_KEEPASS_FILE)")
+    try:
+        return {"entries": await asyncio.to_thread(keepass.entries)}
+    except SecretError as e:
+        raise HTTPException(503, str(e)) from e
 
 
 @router.get("/integrations")
@@ -213,8 +232,13 @@ async def test_device(body: DeviceIn, device_id: int | None = Query(default=None
         sec = {k: (old.get(k) if v == SECRET_MASK else v) for k, v in sec.items()}
         for k, v in old.items():
             sec.setdefault(k, v)
-    collector = registry.build(body.kind, body.host, {k: resolve_secret(v) for k, v in cfg.items()},
-                               {k: resolve_secret(v) for k, v in sec.items()})
+    try:
+        collector = registry.build(body.kind, body.host, {k: resolve_secret(v) for k, v in cfg.items()},
+                                   {k: resolve_secret(v) for k, v in sec.items()})
+    except SecretError as e:
+        return {"ok": False, "reachable": False, "error": f"Credential reference failed: {e}", "elapsed_ms": 0,
+                "facts": {}, "metrics": {}, "interfaces": 0, "neighbors": 0, "gateways": 0, "children": 0,
+                "logs": 0, "sections": []}
     tmp = Device(id=0, name=body.name, kind=body.kind, host=body.host, config=cfg)
     started = time.perf_counter()
     try:

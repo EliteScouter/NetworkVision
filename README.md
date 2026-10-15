@@ -55,6 +55,32 @@ Any credential field accepts `env:VARIABLE_NAME`. Define the variable in your Po
 directly are Fernet-encrypted at rest with a key derived from `NV_SECRET_KEY`, and they are never sent back to the browser.
 Variables starting with `NV_` can't be referenced, so NetworkVision's own secrets stay private.
 
+### Two-factor authentication (MFA)
+
+Go to **Integrations → Security → Set up authenticator** and scan the QR code with any TOTP app (Google Authenticator,
+Authy, 1Password, Bitwarden, KeePassXC…). Save the 10 one-time recovery codes. After that, signing in needs your
+password **and** a code. Turning MFA on or off signs out every other session.
+
+- Prefer config-as-code? Set `NV_ADMIN_TOTP_SECRET` (base32) instead. MFA is then always on.
+- Lost your phone *and* your recovery codes? Set `NV_MFA_RESET=true`, restart, sign in, remove the variable and enroll again.
+
+### KeePass integration
+
+Keep device credentials in KeePass instead of NetworkVision:
+
+1. Create a **dedicated** `.kdbx` (KeePass / KeePassXC) holding only the credentials NetworkVision needs.
+2. Copy it to the Docker host and mount it read-only (see the commented volume in `docker-compose.yml`).
+3. Set `NV_KEEPASS_FILE`, plus `NV_KEEPASS_PASSWORD` and/or `NV_KEEPASS_KEYFILE`.
+4. In any credential field click the 🔑 button, or type a reference:
+   | Reference | Resolves to |
+   |---|---|
+   | `kp:Network/pfSense` | the entry's password |
+   | `kp:Network/UniFi#username` | its username |
+   | `kp:Network/pfSense#api_key` | a custom string field |
+
+Values are read at poll time and never stored or shown. When you update the file (e.g. Syncthing, a scheduled copy),
+NetworkVision reloads it and reconnects with the rotated credentials automatically.
+
 ### Database
 
 SQLite in the `/data` volume is the zero-setup default, and it handles a homelab comfortably. To use an existing

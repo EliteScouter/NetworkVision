@@ -17,7 +17,9 @@ import {
 import { motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
+import { AccountSecurity, type KeePassStatus } from "../components/AccountSecurity";
 import { DeviceIcon, ROLE_LABEL } from "../components/DeviceIcon";
+import { KeePassPicker } from "../components/KeePassPicker";
 import { Badge, Drawer, Empty, Field, Kv, Panel, Segmented, Spinner, StatusDot, Toggle } from "../components/ui";
 import { api } from "../lib/api";
 import { ago } from "../lib/format";
@@ -48,7 +50,9 @@ type TestResult = {
   metrics: Record<string, number>; interfaces: number; neighbors: number; gateways: number; children: number; logs: number; sections: string[];
 };
 
-function DynamicField({ f, value, onChange }: { f: FieldSpec; value: unknown; onChange: (v: unknown) => void }) {
+const isRef = (v: unknown) => typeof v === "string" && (v.startsWith("env:") || v.startsWith("kp:"));
+
+function DynamicField({ f, value, onChange, keepassOn }: { f: FieldSpec; value: unknown; onChange: (v: unknown) => void; keepassOn: boolean }) {
   if (f.type === "bool") return <Toggle checked={!!value} onChange={onChange} label={f.label} />;
   return (
     <Field label={<>{f.label}{f.required && <span className="text-crit"> *</span>}{f.secret && <KeyRound size={10} className="ml-1 inline text-violet" />}</>} help={f.help}>
@@ -57,18 +61,21 @@ function DynamicField({ f, value, onChange }: { f: FieldSpec; value: unknown; on
           {f.options?.map((o) => <option key={o}>{o}</option>)}
         </select>
       ) : (
-        <input className="input font-mono" type={f.type === "password" && !(String(value ?? "").startsWith("env:")) ? "password" : f.type === "number" ? "number" : "text"}
+        <div className="flex gap-2">
+        <input className={clsx("input font-mono", isRef(value) && "!text-violet")} type={f.type === "password" && !isRef(value) ? "password" : f.type === "number" ? "number" : "text"}
           value={String(value ?? "")} placeholder={f.placeholder || (f.default != null ? String(f.default) : "")}
           onFocus={(e) => f.secret && value === MASK && e.target.select()}
           onChange={(e) => onChange(f.type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)}
           autoComplete="off" spellCheck={false} />
+        {keepassOn && (f.secret || f.key === "username") && <KeePassPicker onPick={onChange} />}
+        </div>
       )}
     </Field>
   );
 }
 
-function DeviceForm({ integrations, roles, initial, onSaved, onBack }: {
-  integrations: Integration[]; roles: string[]; initial: FormState; onSaved: () => void; onBack?: () => void;
+function DeviceForm({ integrations, roles, initial, onSaved, onBack, keepassOn }: {
+  integrations: Integration[]; roles: string[]; initial: FormState; onSaved: () => void; onBack?: () => void; keepassOn: boolean;
 }) {
   const [f, setF] = useState<FormState>(initial);
   const [test, setTest] = useState<TestResult | null>(null);
@@ -131,14 +138,15 @@ function DeviceForm({ integrations, roles, initial, onSaved, onBack }: {
         <div className="grid gap-4 sm:grid-cols-2">
           {spec?.fields.map((fs) => (
             <div key={fs.key} className={clsx(fs.type === "bool" && "self-end pb-2")}>
-              <DynamicField f={fs} value={f.values[fs.key]} onChange={(v) => setF({ ...f, values: { ...f.values, [fs.key]: v } })} />
+              <DynamicField f={fs} value={f.values[fs.key]} keepassOn={keepassOn} onChange={(v) => setF({ ...f, values: { ...f.values, [fs.key]: v } })} />
             </div>
           ))}
         </div>
         <div className="flex items-start gap-2 rounded-lg border border-violet/25 bg-violet/5 p-2.5 text-xs text-dim">
           <KeyRound size={14} className="mt-0.5 shrink-0 text-violet" />
-          <span>Secrets are encrypted at rest and never sent back to the browser. Prefer <code className="text-violet">env:VARIABLE_NAME</code> to keep them
-            entirely in your Portainer stack environment (variables starting with <code>NV_</code> are blocked).</span>
+          <span>Secrets are encrypted at rest and never sent back to the browser. Or keep them out of NetworkVision entirely:
+            <code className="mx-1 text-violet">env:VARIABLE_NAME</code> reads your stack environment (<code>NV_*</code> is blocked) and
+            <code className="mx-1 text-violet">kp:Group/Entry</code> reads your KeePass database{keepassOn ? " (use the key button)" : " once configured under Security"}.</span>
         </div>
       </div>
 
@@ -193,7 +201,11 @@ const SYSLOG_GUIDES: [string, string][] = [
 
 export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
   const [params, setParams] = useSearchParams();
-  const [tab, setTab] = useState<"devices" | "syslog" | "system">("devices");
+  const [tab, setTab] = useState<"devices" | "syslog" | "security" | "system">(
+    params.get("tab") === "security" ? "security" : "devices");
+  const { data: kpStatus } = useApi<KeePassStatus>("/keepass/status", 60000);
+  const { data: me } = useApi<{ sso: boolean }>("/auth/me");
+  const keepassOn = !!kpStatus?.configured && !!kpStatus.ok;
   const { data: info } = useApi<{ integrations: Integration[]; roles: string[] }>("/integrations");
   const { data: list, reload } = useApi<{ devices: (DeviceDetail & { config: Record<string, unknown> })[] }>("/devices", 15000);
   const live = useLive((s) => s.devices);
@@ -244,7 +256,8 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
     <div className="mx-auto max-w-[1400px] space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-center gap-3">
         <Segmented value={tab} onChange={setTab} options={[
-          { value: "devices", label: "Integrations" }, { value: "syslog", label: "Syslog setup" }, { value: "system", label: "System" },
+          { value: "devices", label: "Integrations" }, { value: "syslog", label: "Syslog setup" },
+          { value: "security", label: "Security" }, { value: "system", label: "System" },
         ]} />
         {tab === "devices" && <button className="btn btn-primary ml-auto" onClick={() => setDrawer({ mode: "pick" })}><Plus size={15} /> Add integration</button>}
       </div>
@@ -268,7 +281,7 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
                 {st.error && <div className="mt-3 truncate rounded-md border border-warn/30 bg-warn/5 px-2 py-1 text-xs text-warn" title={st.error}>{st.error}</div>}
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {Object.entries(d.secrets ?? {}).map(([k, v]) => (
-                    <Badge key={k} tone={String(v).startsWith("env:") ? "violet" : "neutral"}><KeyRound size={9} /> {k}{String(v).startsWith("env:") && ` ← ${String(v).slice(4)}`}</Badge>
+                    <Badge key={k} tone={isRef(v) ? "violet" : "neutral"}><KeyRound size={9} /> {k}{isRef(v) && ` ← ${String(v)}`}</Badge>
                   ))}
                   {childCount(d.id) > 0 && <Badge tone="cyan">{childCount(d.id)} discovered</Badge>}
                 </div>
@@ -302,6 +315,8 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
           </div>
         </Panel>
       )}
+
+      {tab === "security" && <AccountSecurity keepass={kpStatus} sso={!!me?.sso} />}
 
       {tab === "system" && meta && (
         <div className="grid gap-4 md:grid-cols-2">
@@ -349,7 +364,7 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
         {drawer?.mode === "form" && info && (
           <DeviceForm key={drawer.initial.id ?? drawer.initial.kind} integrations={info.integrations} roles={info.roles} initial={drawer.initial}
             onBack={drawer.initial.id ? undefined : () => setDrawer({ mode: "pick" })}
-            onSaved={() => { setDrawer(null); reload(); }} />
+            onSaved={() => { setDrawer(null); reload(); }} keepassOn={keepassOn} />
         )}
       </Drawer>
     </div>

@@ -144,3 +144,13 @@ class Alert(Base):
     acknowledged_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     acknowledged_by: Mapped[str] = mapped_column(String(64), default="")
     count: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class Setting(Base):
+    """Small key/value store for runtime state (e.g. MFA). Sensitive values are stored encrypted."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[float] = mapped_column(Float, default=now, onupdate=now)

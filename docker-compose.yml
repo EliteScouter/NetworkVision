@@ -21,6 +21,13 @@ services:
       NV_ADMIN_PASSWORD_HASH: ${NV_ADMIN_PASSWORD_HASH:-}
       NV_COOKIE_SECURE: ${NV_COOKIE_SECURE:-false}
       NV_TRUSTED_PROXY_HEADER: ${NV_TRUSTED_PROXY_HEADER:-}
+      # MFA (optional): enroll in the UI, or pin a TOTP secret here
+      NV_ADMIN_TOTP_SECRET: ${NV_ADMIN_TOTP_SECRET:-}
+      NV_MFA_RESET: ${NV_MFA_RESET:-false}
+      # KeePass secret provider (optional): kp:Group/Entry references
+      NV_KEEPASS_FILE: ${NV_KEEPASS_FILE:-}
+      NV_KEEPASS_PASSWORD: ${NV_KEEPASS_PASSWORD:-}
+      NV_KEEPASS_KEYFILE: ${NV_KEEPASS_KEYFILE:-}
       NV_DEMO_MODE: ${NV_DEMO_MODE:-false}
       NV_POLL_INTERVAL: ${NV_POLL_INTERVAL:-15}
       NV_LOG_LEVEL: ${NV_LOG_LEVEL:-INFO}
@@ -51,6 +58,8 @@ services:
       TPLINK_PASSWORD: ${TPLINK_PASSWORD:-}
     volumes:
       - networkvision-data:/data
+      # KeePass: mount a dedicated .kdbx read-only, then set NV_KEEPASS_FILE=/secrets/networkvision.kdbx
+      # - /opt/networkvision/networkvision.kdbx:/secrets/networkvision.kdbx:ro
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]

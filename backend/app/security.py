@@ -28,6 +28,7 @@ from .config import get_settings
 
 COOKIE_NAME = "nv_session"
 ENV_REF_PREFIX = "env:"
+KEEPASS_REF_PREFIX = "kp:"
 SECRET_MASK = "••••••••"
 
 
@@ -60,8 +61,35 @@ def decrypt_secrets(blob: str | None) -> dict[str, Any]:
         return {}
 
 
+def encrypt_blob(data: dict[str, Any]) -> str:
+    """Encrypt arbitrary JSON state (unlike encrypt_secrets, empty values are kept)."""
+    return _fernet().encrypt(json.dumps(data).encode()).decode()
+
+
+def decrypt_blob(blob: str | None) -> dict[str, Any] | None:
+    """None means "present but undecryptable" (NV_SECRET_KEY changed); {} means empty."""
+    if not blob:
+        return {}
+    try:
+        return json.loads(_fernet().decrypt(blob.encode()))
+    except (InvalidToken, ValueError):
+        return None
+
+
+def is_reference(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith((ENV_REF_PREFIX, KEEPASS_REF_PREFIX))
+
+
 def resolve_secret(value: Any) -> Any:
-    """Resolve ``env:NAME`` references against the process environment."""
+    """Resolve ``env:NAME`` and ``kp:Group/Entry[#field]`` references.
+
+    env: misses resolve to "" (an unset variable); kp: misses raise SecretError so the
+    operator gets a precise message instead of a vague authentication failure.
+    """
+    if isinstance(value, str) and value.startswith(KEEPASS_REF_PREFIX):
+        from .services.keepass import keepass  # local import: avoid cycle
+
+        return keepass.resolve(value[len(KEEPASS_REF_PREFIX) :])
     if isinstance(value, str) and value.startswith(ENV_REF_PREFIX):
         name = value[len(ENV_REF_PREFIX) :].strip()
         # Never let a device config exfiltrate NetworkVision's own secrets (NV_SECRET_KEY, DB password...).
@@ -72,10 +100,10 @@ def resolve_secret(value: Any) -> Any:
 
 
 def mask_secrets(data: dict[str, Any]) -> dict[str, Any]:
-    """What the UI sees: env references are shown (they are not secret), values are masked."""
+    """What the UI sees: env:/kp: references are shown (they are not secret), values are masked."""
     out: dict[str, Any] = {}
     for k, v in data.items():
-        if isinstance(v, str) and v.startswith(ENV_REF_PREFIX):
+        if is_reference(v):
             out[k] = v
         elif v not in (None, ""):
             out[k] = SECRET_MASK
@@ -105,19 +133,37 @@ def auth_configured() -> bool:
     return s.auth_disabled or bool(s.admin_password or s.admin_password_hash or s.trusted_proxy_header)
 
 
-def issue_token(username: str) -> str:
+class SecretError(Exception):
+    """A secret reference (kp:...) could not be resolved."""
+
+
+# Bumped whenever MFA is enabled/disabled: every token issued before that stops working.
+_session_epoch = 0
+
+
+def set_session_epoch(epoch: int) -> None:
+    global _session_epoch
+    _session_epoch = int(epoch)
+
+
+def issue_token(username: str, purpose: str = "session", ttl: int | None = None) -> str:
+    """purpose="session" is a login cookie; purpose="mfa" only proves the password step passed."""
     s = get_settings()
     now = int(time.time())
-    payload = {"sub": username, "iat": now, "exp": now + s.session_hours * 3600}
+    payload = {"sub": username, "iat": now, "exp": now + (ttl or s.session_hours * 3600),
+               "pur": purpose, "ep": _session_epoch}
     return jwt.encode(payload, _derive(b"session-v1"), algorithm="HS256")
 
 
-def decode_token(token: str) -> str | None:
+def decode_token(token: str, purpose: str = "session") -> str | None:
     try:
         payload = jwt.decode(token, _derive(b"session-v1"), algorithms=["HS256"])
-        return str(payload.get("sub") or "") or None
     except jwt.PyJWTError:
         return None
+    # An "mfa" half-login token must never work as a session (and vice versa).
+    if payload.get("pur", "session") != purpose or payload.get("ep", 0) != _session_epoch:
+        return None
+    return str(payload.get("sub") or "") or None
 
 
 def _user_from(headers, cookies) -> str | None:

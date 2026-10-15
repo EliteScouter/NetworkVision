@@ -62,6 +62,7 @@ class LogPipeline:
     async def run(self) -> None:
         from .alerts import engine  # local import: avoid cycle
 
+        self.queue = asyncio.Queue(maxsize=50_000)  # bind to the running loop (not the import-time one)
         while True:
             first = await self.queue.get()
             batch = [first]

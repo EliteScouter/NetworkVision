@@ -21,7 +21,9 @@ from .db import dispose, init_db
 from .security import auth_configured, require_user
 from .services import notifier, syslog
 from .services.bus import bus
+from .services.keepass import keepass
 from .services.logs import pipeline
+from .services.mfa import mfa
 from .services.poller import poller
 
 
@@ -41,6 +43,13 @@ async def lifespan(_: FastAPI):
     if not auth_configured():
         log.warning("No admin password set (NV_ADMIN_PASSWORD / NV_ADMIN_PASSWORD_HASH) - logins are impossible")
     await init_db()
+    await mfa.load()
+    if keepass.configured:
+        st = await asyncio.to_thread(keepass.status)
+        if st.get("ok"):
+            log.info("KeePass secret provider ready (%s, %d entries)", st["file"], st["entries"])
+        else:
+            log.error("KeePass secret provider: %s", st.get("error"))
     if s.demo_mode:
         from .demo_seed import seed_demo
 

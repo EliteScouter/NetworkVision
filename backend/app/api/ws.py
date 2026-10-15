@@ -39,11 +39,14 @@ async def live(ws: WebSocket) -> None:
                     await ws.send_json({"type": "pong", "ts": time.time()})
 
         tasks = [asyncio.create_task(pump()), asyncio.create_task(drain())]
-        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
+        for t in done:  # a closed tab ends one task with WebSocketDisconnect: that's normal
+            if not t.cancelled() and (exc := t.exception()) and not isinstance(exc, (WebSocketDisconnect, RuntimeError)):
+                raise exc
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

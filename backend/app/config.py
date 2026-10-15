@@ -46,9 +46,18 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = ""  # plain text (simple) ...
     admin_password_hash: str = ""  # ... or a bcrypt hash (preferred)
+    # Optional: pin the TOTP secret (base32) via env instead of enrolling in the UI.
+    admin_totp_secret: str = ""
+    # Break-glass: clears UI-enrolled MFA on startup (lost phone + lost recovery codes). Unset afterwards!
+    mfa_reset: bool = False
     session_hours: int = 12
     cookie_secure: bool = False  # set true when served over HTTPS
     trusted_proxy_header: str = ""  # e.g. "Remote-User" when using Authelia/Authentik
+
+    # --- KeePass (optional secret source: kp:Group/Entry references) ---------
+    keepass_file: str = ""  # e.g. /secrets/networkvision.kdbx (mount it read-only)
+    keepass_password: str = ""
+    keepass_keyfile: str = ""
 
     # --- Database -------------------------------------------------------------
     # Either a full SQLAlchemy URL, or the discrete DB_* parts below.
