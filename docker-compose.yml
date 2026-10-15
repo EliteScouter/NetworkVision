@@ -6,7 +6,7 @@
 
 services:
   networkvision:
-    image: ghcr.io/${NV_IMAGE_OWNER:-networkvision}/networkvision:${NV_TAG:-latest}
+    image: ghcr.io/${NV_IMAGE_OWNER:-elitescouter}/networkvision:${NV_TAG:-latest}
     build: .
     container_name: networkvision
     restart: unless-stopped
