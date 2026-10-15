@@ -90,3 +90,23 @@ def test_new_feature_endpoints(client):
     assert st["engine"] == "demo" and st["settings"]["interval_min"] == 60
     r = client.put("/api/speedtest/settings", json={"interval_min": 240, "expected_down_mbps": 2000})
     assert r.json()["settings"]["interval_min"] == 240
+def test_security_and_dhcp_endpoints(client):
+    client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"})
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        dh = client.get("/api/dhcp").json()
+        if dh["stats"]["total"] > 0:
+            break
+        time.sleep(0.5)
+    assert dh["stats"]["total"] > 0, "demo DHCP leases were ingested"
+    assert any(i["type"] == "duplicate_hostname" for i in dh["issues"])
+    time.sleep(1.5)  # let the log pipeline flush a batch
+    sec = client.get("/api/security/summary", params={"range": "1h"})
+    assert sec.status_code == 200, sec.text
+    body = sec.json()
+    assert body["totals"]["block"] > 0 and body["top_sources"]
+    ip = body["top_sources"][0]["ip"]
+    assert client.get(f"/api/security/ip/{ip}").status_code == 200
+    assert client.get("/api/security/ip/not-an-ip").status_code == 422
+    mac = dh["clients"][0]["mac"]
+    assert client.post("/api/dhcp/known", json={"mac": mac, "known": True, "label": "mine"}).json()["updated"] >= 1

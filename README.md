@@ -24,6 +24,8 @@ something goes wrong. It ships as a single Docker container that drops straight 
 - **Speed test**: built-in (Cloudflare's speed-test network, no binary). Download, upload, latency, jitter and **bufferbloat** (latency under load). Scheduled (hourly by default) or on demand, with history and a "slower than expected" alert.
 - **Log explorer**: a built-in syslog receiver (UDP + TCP, RFC 3164/5424) plus logs pulled from device APIs. You get a severity histogram, full-text search with `-exclusions`, filters, and live tail.
 - **Alerts**: device down, gateway down/loss/latency, high CPU/mem/temp, link down, port flapping, port errors, saturation, critical syslog, and firmware updates. Alerts are debounced and auto-resolve. You can ack or resolve them, and route them to Discord, Slack, ntfy, or any webhook.
+- **Security**: firewall logs, SSH / firewall-GUI / OpenVPN / web logins and Suricata/Snort alerts become one picture: top attacking IPs, targeted ports and services, an attack timeline, origin countries, a live threat feed and a per-IP drilldown. Detects **brute force**, **port scans**, **logins that succeed after a brute force** (critical), **IDS hits** and **spikes in blocked WAN traffic**.
+- **DHCP**: correlates DHCP leases (pfSense/OPNsense) with UniFi clients from the shared client inventory and finds **IP conflicts**, **duplicate hostnames**, **devices hopping addresses**, **multiple / rogue DHCP servers**, NAK storms, and **brand-new devices** joining the network.
 - **Fast filtering everywhere**, plus a `Ctrl+K` command palette.
 - **Demo mode** gives you a full simulated homelab to explore before connecting anything.
 
@@ -117,6 +119,43 @@ HAProxy endpoint, or one fixed node. That avoids multi-master write conflicts en
 - **TP-Link Easy Smart (TL-SG108E)**: no SNMP exists, so use the *Easy Smart* integration (read-only scraping). These switches allow only one web session at a time.
 
 **Topology tip:** if a switch port description names a device (e.g. `Proxmox-01`), NetworkVision draws the link automatically.
+
+## Security monitoring: what to enable
+
+NetworkVision only sees what your devices log. To watch attacks against services you expose through pfSense:
+
+1. **Send pfSense's logs to NetworkVision.** *Status → System Logs → Settings → Remote Logging Options*: enable
+   remote logging, set the remote server to `<docker-host>:514`, and select *Everything* (or at least *Firewall
+   Events*, *System Events* and *VPN*).
+2. **Log the default block rules.** In the same settings page, check *Log packets matched from the default block
+   rules*. That gives you the internet background noise: who is knocking, and on which ports.
+3. **Log your port forwards.** For every NAT port forward, open its **associated WAN firewall rule** (*Firewall →
+   Rules → WAN*), and under *Extra Options* tick **Log packets that are handled by this rule**. Pass rules are not
+   logged by default, so without this you can't see who actually reaches the exposed service.
+4. **Log your explicit WAN block rules** the same way (and any pfBlockerNG rules you want to see).
+5. **Send the logs of the services themselves.** The firewall only sees connections, not passwords. To catch
+   failed logins, forward the syslog of the hosts behind the port forwards:
+   - SSH servers: rsyslog `*.* @<docker-host>:514` (sshd logs to `auth`)
+   - Reverse proxies (nginx / Traefik / Caddy / HAProxy): send **access logs** to syslog. Bursts of 401/403 count
+     as failed logins. nginx example: `access_log syslog:server=<docker-host>:514,tag=nginx combined;`
+   - OpenVPN on pfSense is covered by step 1.
+6. **Optional IDS.** Install Suricata or Snort on pfSense/OPNsense, enable *Send alerts to system log*, and every
+   alert shows up with its signature and priority. Priority 1 alerts are critical.
+7. **Optional GeoIP.** Create a free MaxMind account, then set `NV_GEOIP_LICENSE_KEY`. The GeoLite2 Country
+   database is downloaded into the data volume and refreshed weekly.
+
+**Tuning:** internet scanners hit every public IP all day, so scans that were **completely blocked** are recorded
+and shown but don't raise alerts unless `NV_SEC_SCAN_ALERT_BLOCKED=true`. Scans from **inside** your network (a
+compromised IoT device, say) and scans that got anything through always alert. Put trusted scanners (your
+vulnerability scanner, monitoring) in `NV_SEC_IGNORE_IPS`. All thresholds are listed under `NV_SEC_*` in
+[`.env.example`](.env.example).
+
+## DHCP insights
+
+These checks work automatically once pfSense/OPNsense (leases) and/or UniFi (clients) are connected. For the
+"multiple DHCP servers" check, also forward the DHCP server logs (`dhcpd`, `dnsmasq`, Kea) to syslog. Mark the
+devices you recognize as **Known** on the *DHCP* page. "New device" alerts start after a learning period
+(`NV_DHCP_LEARNING_HOURS`, default 1 hour), so your existing devices don't each raise one.
 
 ## Configuration
 

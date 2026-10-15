@@ -40,6 +40,12 @@ def _mac(i: int) -> str:
     return f"0a:{0x10:02x}:{i:02x}:{(i * 7) & 0xFF:02x}:{(i * 13) & 0xFF:02x}:{(i * 31) & 0xFF:02x}"
 
 
+def dhcp_hosts() -> list[tuple[str, str, str]]:
+    """(ip, mac, hostname) the demo gateway leases out - the same devices the demo UniFi reports."""
+    return [(f"10.0.{30 if ssid == 'IoT' else 70 if ssid == 'Guests' else 10}.{20 + i}", _mac(i), name.lower())
+            for i, (name, _, _, ssid, *_rest) in enumerate(DEVICES)]
+
+
 def _wave(period: float, phase: float = 0) -> float:
     return 0.5 + 0.5 * math.sin((time.time() - T0) / period * 2 * math.pi + phase)
 

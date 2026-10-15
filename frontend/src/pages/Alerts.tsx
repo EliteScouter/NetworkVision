@@ -15,6 +15,10 @@ const RULE_LABEL: Record<string, string> = {
   high_temp: "Temperature", high_latency: "Latency", packet_loss: "Packet loss", gateway_down: "Gateway down",
   gateway_loss: "Gateway loss", gateway_latency: "Gateway latency", port_flapping: "Port flapping", port_down: "Link down",
   port_errors: "Port errors", port_saturated: "Saturation", firmware_update: "Firmware", log_event: "Critical log",
+  sec_bruteforce: "Brute force", sec_login_after_failures: "Possible breach", sec_portscan: "Port scan", sec_ids: "IDS",
+  sec_wan_spike: "WAN spike", dhcp_ip_conflict: "IP conflict", dhcp_duplicate_hostname: "Duplicate hostname",
+  dhcp_address_hopping: "Address hopping", dhcp_multiple_servers: "Multiple DHCP servers", dhcp_rogue_server: "Rogue DHCP",
+  dhcp_nak_storm: "DHCPNAK storm", dhcp_new_device: "New device",
 };
 
 export default function AlertsPage() {

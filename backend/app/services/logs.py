@@ -60,7 +60,9 @@ class LogPipeline:
             self.dropped += 1
 
     async def run(self) -> None:
-        from .alerts import engine  # local import: avoid cycle
+        from .alerts import engine  # local imports: avoid cycles
+        from .dhcp import dhcp
+        from .security import security
 
         self.queue = asyncio.Queue(maxsize=50_000)  # bind to the running loop (not the import-time one)
         while True:
@@ -85,6 +87,11 @@ class LogPipeline:
             except Exception:  # noqa: BLE001 - never let the pipeline die
                 log.exception("Failed to persist %d log lines", len(batch))
             bus.publish({"type": "logs", "items": batch[-300:]})
+            try:  # security + DHCP analysis of the same lines
+                await security.ingest_batch(batch)
+                await dhcp.ingest_logs(batch)
+            except Exception:  # noqa: BLE001
+                log.exception("Security/DHCP analysis failed")
             for e in batch:
                 if e["severity"] <= 2 and e.get("source") != "system":
                     digest = hashlib.blake2s(e["message"][:80].encode(), digest_size=6).hexdigest()

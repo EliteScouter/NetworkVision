@@ -367,3 +367,103 @@ export interface SpeedStatus {
   next_run: number | null; last: SpeedResult | null; recent: SpeedResult[];
 }
 export interface SpeedProgress { state?: string; phase?: string; mbps?: number; progress?: number; result?: SpeedResult }
+// ---------------------------------------------------------------- security
+export type SecCategory = "block" | "pass" | "auth_fail" | "auth_ok" | "ids";
+
+export interface SecEvent {
+  ts: number;
+  category: SecCategory;
+  src: string;
+  dst: string;
+  dport: number | null;
+  proto: string;
+  service: string;
+  user: string;
+  detail: string;
+  severity: number;
+  device_id: number | null;
+  country: string | null;
+  internal: boolean;
+  count?: number;
+}
+
+export type SecTimelinePoint = { ts: number } & Record<SecCategory, number>;
+
+export interface SecSource {
+  ip: string;
+  attacks: number;
+  block: number;
+  auth_fail: number;
+  ids: number;
+  auth_ok: number;
+  pass: number;
+  last_seen: number;
+  ports: number;
+  country: string | null;
+  internal: boolean;
+}
+
+export interface SecuritySummary {
+  range: string;
+  totals: Record<SecCategory, number>;
+  attackers: number;
+  geoip: "none" | "maxmind" | "demo";
+  timeline: SecTimelinePoint[];
+  top_sources: SecSource[];
+  countries: { country: string; attacks: number }[];
+  top_ports: { port: number; proto: string; service: string; count: number; sources: number }[];
+  services: { service: string; category: SecCategory; count: number; sources: number }[];
+  recent: SecEvent[];
+  detections: (Alert & { src: string | null })[];
+  engine: Record<string, number>;
+}
+
+export interface IpReport {
+  ip: string;
+  country: string | null;
+  internal: boolean;
+  totals: Record<SecCategory, number>;
+  first_seen: number | null;
+  last_seen: number | null;
+  timeline: SecTimelinePoint[];
+  ports: { port: number; proto: string; service: string; category: SecCategory; count: number }[];
+  targets: { ip: string; count: number }[];
+  credentials: { service: string; user: string; category: SecCategory; count: number }[];
+  alerts: Alert[];
+  logs: { id: number; ts: number; device: string | null; host: string; severity: number; app: string; message: string }[];
+}
+
+// -------------------------------------------------------------------- dhcp
+export interface DhcpClient {
+  id: number | null;
+  mac: string;
+  ip: string;
+  hostname: string;
+  source: "lease" | "controller";
+  source_device_id: number | null;
+  first_seen: number;
+  last_seen: number;
+  known: boolean;
+  label: string;
+  active: boolean;
+  conflict: boolean;
+  seen_by: string[];
+}
+
+export interface DhcpIssue {
+  key: string;
+  type: "ip_conflict" | "duplicate_hostname" | "address_hopping" | "multiple_servers";
+  severity: "warning" | "info";
+  title: string;
+  detail: string;
+  subject: string;
+  members: Record<string, unknown>[];
+}
+
+export interface DhcpOverview {
+  clients: DhcpClient[];
+  issues: DhcpIssue[];
+  learning: boolean;
+  stats: { total: number; active: number; macs: number; new_24h: number; unknown: number; issues: number };
+  sources: Record<string, string | null>;
+}
