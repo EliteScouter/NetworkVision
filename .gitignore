@@ -1,0 +1,39 @@
+# --- Secrets: never commit these -------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- Runtime data ------------------------------------------------------------
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# --- Node --------------------------------------------------------------------
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# --- Editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.claude/

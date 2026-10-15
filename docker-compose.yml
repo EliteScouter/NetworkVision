@@ -1,0 +1,62 @@
+# NetworkVision - Portainer / docker compose stack.
+#
+# In Portainer: Stacks > Add stack > paste this file (or point it at the Git repo),
+# then define the environment variables in the "Environment variables" section
+# (see .env.example for the full list). Nothing secret belongs in this file.
+
+services:
+  networkvision:
+    image: ghcr.io/${NV_IMAGE_OWNER:-networkvision}/networkvision:${NV_TAG:-latest}
+    build: .
+    container_name: networkvision
+    restart: unless-stopped
+    ports:
+      - "${NV_HTTP_PORT:-8080}:8080"      # web UI / API
+      - "${NV_SYSLOG_HOST_PORT:-514}:5514/udp"  # syslog (UDP)
+      - "${NV_SYSLOG_HOST_PORT:-514}:5514/tcp"  # syslog (TCP)
+    environment:
+      NV_SECRET_KEY: ${NV_SECRET_KEY:?Set NV_SECRET_KEY (openssl rand -base64 48)}
+      NV_ADMIN_USERNAME: ${NV_ADMIN_USERNAME:-admin}
+      NV_ADMIN_PASSWORD: ${NV_ADMIN_PASSWORD:-}
+      NV_ADMIN_PASSWORD_HASH: ${NV_ADMIN_PASSWORD_HASH:-}
+      NV_COOKIE_SECURE: ${NV_COOKIE_SECURE:-false}
+      NV_TRUSTED_PROXY_HEADER: ${NV_TRUSTED_PROXY_HEADER:-}
+      NV_DEMO_MODE: ${NV_DEMO_MODE:-false}
+      NV_POLL_INTERVAL: ${NV_POLL_INTERVAL:-15}
+      NV_LOG_LEVEL: ${NV_LOG_LEVEL:-INFO}
+      # Database: sqlite (default, stored in the volume) or mariadb
+      NV_DB_DRIVER: ${NV_DB_DRIVER:-sqlite}
+      NV_DB_HOST: ${NV_DB_HOST:-}
+      NV_DB_PORT: ${NV_DB_PORT:-3306}
+      NV_DB_NAME: ${NV_DB_NAME:-networkvision}
+      NV_DB_USER: ${NV_DB_USER:-networkvision}
+      NV_DB_PASSWORD: ${NV_DB_PASSWORD:-}
+      NV_RETENTION_DAYS_METRICS: ${NV_RETENTION_DAYS_METRICS:-7}
+      NV_RETENTION_DAYS_LOGS: ${NV_RETENTION_DAYS_LOGS:-14}
+      # Notifications (all optional)
+      NV_NOTIFY_MIN_SEVERITY: ${NV_NOTIFY_MIN_SEVERITY:-warning}
+      NV_NOTIFY_DISCORD_WEBHOOK_URL: ${NV_NOTIFY_DISCORD_WEBHOOK_URL:-}
+      NV_NOTIFY_SLACK_WEBHOOK_URL: ${NV_NOTIFY_SLACK_WEBHOOK_URL:-}
+      NV_NOTIFY_NTFY_URL: ${NV_NOTIFY_NTFY_URL:-}
+      NV_NOTIFY_NTFY_TOKEN: ${NV_NOTIFY_NTFY_TOKEN:-}
+      NV_NOTIFY_WEBHOOK_URL: ${NV_NOTIFY_WEBHOOK_URL:-}
+      # Device credentials referenced from the UI as env:NAME (examples)
+      PFSENSE_API_KEY: ${PFSENSE_API_KEY:-}
+      OPNSENSE_API_KEY: ${OPNSENSE_API_KEY:-}
+      OPNSENSE_API_SECRET: ${OPNSENSE_API_SECRET:-}
+      UNIFI_USERNAME: ${UNIFI_USERNAME:-}
+      UNIFI_PASSWORD: ${UNIFI_PASSWORD:-}
+      UNIFI_API_KEY: ${UNIFI_API_KEY:-}
+      SNMP_COMMUNITY: ${SNMP_COMMUNITY:-}
+      TPLINK_PASSWORD: ${TPLINK_PASSWORD:-}
+    volumes:
+      - networkvision-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    sysctls:
+      # lets the unprivileged process send ICMP echo (ping)
+      net.ipv4.ping_group_range: "0 2147483647"
+
+volumes:
+  networkvision-data:

@@ -1,0 +1,172 @@
+"""Authentication, session tokens and at-rest encryption of device credentials.
+
+Device secrets (API keys, SNMP communities, passwords) are never returned to the
+browser. They are stored Fernet-encrypted with a key derived from NV_SECRET_KEY,
+or - even better - kept out of the database entirely by entering a reference
+like ``env:PFSENSE_API_KEY``, which is resolved from the container environment
+at poll time.
+"""
+
+from __future__ import annotations
+
+import base64
+import hmac
+import json
+import os
+import time
+from collections import defaultdict, deque
+from typing import Any
+
+import bcrypt
+import jwt
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from fastapi import HTTPException, Request, WebSocket, status
+
+from .config import get_settings
+
+COOKIE_NAME = "nv_session"
+ENV_REF_PREFIX = "env:"
+SECRET_MASK = "••••••••"
+
+
+# --------------------------------------------------------------------------- #
+# Credential encryption
+# --------------------------------------------------------------------------- #
+def _derive(purpose: bytes) -> bytes:
+    key = get_settings().secret_key.encode()
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=b"networkvision", info=purpose).derive(key)
+
+
+def _fernet() -> Fernet:
+    return Fernet(base64.urlsafe_b64encode(_derive(b"device-secrets-v1")))
+
+
+def encrypt_secrets(data: dict[str, Any]) -> str | None:
+    clean = {k: v for k, v in data.items() if v not in (None, "")}
+    if not clean:
+        return None
+    return _fernet().encrypt(json.dumps(clean).encode()).decode()
+
+
+def decrypt_secrets(blob: str | None) -> dict[str, Any]:
+    if not blob:
+        return {}
+    try:
+        return json.loads(_fernet().decrypt(blob.encode()))
+    except (InvalidToken, ValueError):
+        # Most likely NV_SECRET_KEY changed. Fail closed, never crash the poller.
+        return {}
+
+
+def resolve_secret(value: Any) -> Any:
+    """Resolve ``env:NAME`` references against the process environment."""
+    if isinstance(value, str) and value.startswith(ENV_REF_PREFIX):
+        name = value[len(ENV_REF_PREFIX) :].strip()
+        # Never let a device config exfiltrate NetworkVision's own secrets (NV_SECRET_KEY, DB password...).
+        if not name or name.upper().startswith("NV_"):
+            return ""
+        return os.environ.get(name, "")
+    return value
+
+
+def mask_secrets(data: dict[str, Any]) -> dict[str, Any]:
+    """What the UI sees: env references are shown (they are not secret), values are masked."""
+    out: dict[str, Any] = {}
+    for k, v in data.items():
+        if isinstance(v, str) and v.startswith(ENV_REF_PREFIX):
+            out[k] = v
+        elif v not in (None, ""):
+            out[k] = SECRET_MASK
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Passwords & sessions
+# --------------------------------------------------------------------------- #
+def verify_admin(username: str, password: str) -> bool:
+    s = get_settings()
+    user_ok = hmac.compare_digest(username.encode(), s.admin_username.encode())
+    if s.admin_password_hash:
+        try:
+            pw_ok = bcrypt.checkpw(password.encode(), s.admin_password_hash.encode())
+        except ValueError:
+            pw_ok = False
+    elif s.admin_password:
+        pw_ok = hmac.compare_digest(password.encode(), s.admin_password.encode())
+    else:
+        pw_ok = False  # no password configured -> nobody gets in
+    return user_ok and pw_ok
+
+
+def auth_configured() -> bool:
+    s = get_settings()
+    return s.auth_disabled or bool(s.admin_password or s.admin_password_hash or s.trusted_proxy_header)
+
+
+def issue_token(username: str) -> str:
+    s = get_settings()
+    now = int(time.time())
+    payload = {"sub": username, "iat": now, "exp": now + s.session_hours * 3600}
+    return jwt.encode(payload, _derive(b"session-v1"), algorithm="HS256")
+
+
+def decode_token(token: str) -> str | None:
+    try:
+        payload = jwt.decode(token, _derive(b"session-v1"), algorithms=["HS256"])
+        return str(payload.get("sub") or "") or None
+    except jwt.PyJWTError:
+        return None
+
+
+def _user_from(headers, cookies) -> str | None:
+    s = get_settings()
+    if s.auth_disabled:
+        return "anonymous"
+    if s.trusted_proxy_header:
+        proxied = headers.get(s.trusted_proxy_header)
+        if proxied:
+            return proxied
+    token = cookies.get(COOKIE_NAME)
+    if not token:
+        auth = headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:]
+    return decode_token(token) if token else None
+
+
+def require_user(request: Request) -> str:
+    user = _user_from(request.headers, request.cookies)
+    if not user:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    return user
+
+
+def websocket_user(ws: WebSocket) -> str | None:
+    return _user_from(ws.headers, ws.cookies)
+
+
+# --------------------------------------------------------------------------- #
+# Tiny in-memory login rate limiter (per client IP)
+# --------------------------------------------------------------------------- #
+class LoginLimiter:
+    def __init__(self, attempts: int = 8, window: int = 300) -> None:
+        self.attempts, self.window = attempts, window
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, key: str) -> None:
+        q, now = self._hits[key], time.time()
+        while q and now - q[0] > self.window:
+            q.popleft()
+        if len(q) >= self.attempts:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many login attempts, try later")
+
+    def fail(self, key: str) -> None:
+        self._hits[key].append(time.time())
+
+    def reset(self, key: str) -> None:
+        self._hits.pop(key, None)
+
+
+login_limiter = LoginLimiter()
