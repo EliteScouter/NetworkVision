@@ -72,6 +72,11 @@ NV_DB_PASSWORD=...
 ```
 Tables are created automatically on first start.
 
+**MariaDB Galera clusters** are supported. NetworkVision uses `READ COMMITTED`, retries certification
+conflicts and node failovers, writes logs in small batches, and purges expired data in small chunks so
+retention never produces a giant write set. Point `NV_DB_HOST` at a single writer: your MaxScale / ProxySQL /
+HAProxy endpoint, or one fixed node. That avoids multi-master write conflicts entirely.
+
 ## Per-device setup notes
 
 - **pfSense**: install the REST API package (System → Package Manager, or see pfrest.org), then create a key under *System → REST API → Keys*, ideally for a read-only user.

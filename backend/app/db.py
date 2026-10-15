@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import AsyncIterator
+import random
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
-from sqlalchemy import event
+from sqlalchemy import ColumnElement, delete, event, select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -33,7 +36,9 @@ def engine() -> AsyncEngine:
             Path(s.data_dir).mkdir(parents=True, exist_ok=True)
             kwargs = {"connect_args": {"timeout": 30}}
         else:
-            kwargs.update(pool_size=10, max_overflow=10, pool_recycle=1800)
+            # READ COMMITTED avoids gap locks, which cause needless certification
+            # conflicts on Galera clusters; harmless on a single MariaDB server.
+            kwargs.update(pool_size=10, max_overflow=10, pool_recycle=1800, isolation_level="READ COMMITTED")
         _engine = create_async_engine(url, **kwargs)
         if url.startswith("sqlite"):
 
@@ -67,6 +72,58 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
     safe = engine().url.render_as_string(hide_password=True)
     log.info("Database ready (%s)", safe)
+
+
+# MariaDB/Galera errors that are safe to retry: deadlock / certification failure,
+# lock wait timeout, node not ready (WSREP), and dropped connections (node failover).
+RETRYABLE_MYSQL_CODES = {1213, 1205, 1047, 1180, 2006, 2013}
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    orig = getattr(exc, "orig", None)
+    args = getattr(orig, "args", ()) or ()
+    return bool(args) and isinstance(args[0], int) and args[0] in RETRYABLE_MYSQL_CODES
+
+
+async def with_retry[T](fn: Callable[[AsyncSession], Awaitable[T]], attempts: int = 4) -> T:
+    """Run ``fn(session)`` in a fresh session/transaction, retrying transient cluster errors.
+
+    ``fn`` must be idempotent per attempt (it gets a new session each time) and commit itself.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            async with sessionmaker()() as db:
+                return await fn(db)
+        except DBAPIError as e:
+            if attempt == attempts or not _is_retryable(e):
+                raise
+            delay = 0.1 * 2**attempt + random.random() * 0.1
+            log.warning("Transient database error (%s), retry %d/%d in %.2fs", e.orig, attempt, attempts - 1, delay)
+            await asyncio.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
+async def delete_in_chunks(model: type, where: ColumnElement[bool], batch: int = 5000) -> int:
+    """Delete matching rows in small transactions.
+
+    One huge DELETE is a single giant Galera write set: it stalls the whole cluster
+    (flow control) or exceeds wsrep_max_ws_size. Small batches replicate smoothly.
+    """
+    total = 0
+    pk = model.__table__.primary_key.columns.values()[0]
+    while True:
+        async def _one(db: AsyncSession) -> int:
+            ids = (await db.execute(select(pk).where(where).limit(batch))).scalars().all()
+            if ids:
+                await db.execute(delete(model).where(pk.in_(ids)))
+                await db.commit()
+            return len(ids)
+
+        n = await with_retry(_one)
+        total += n
+        if n < batch:
+            return total
+        await asyncio.sleep(0.05)  # let replication breathe between batches
 
 
 async def dispose() -> None:

@@ -10,13 +10,14 @@ import logging
 import time
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..collectors import registry
 from ..collectors.base import ChildSnapshot, Collector, CollectorError, Snapshot
 from ..collectors.ping import icmp_probe
 from ..config import get_settings
-from ..db import sessionmaker
+from ..db import delete_in_chunks, sessionmaker, with_retry
 from ..models import Alert, Device, DeviceMetric, InterfaceMetric, LogEntry
 from ..security import decrypt_secrets, resolve_secret
 from .alerts import engine
@@ -308,22 +309,28 @@ class Poller:
                 if i.oper_up and (i.rx_bps is not None or i.errors_per_min):
                     if_rows.append({"ts": now, "device_id": st.id, "ifname": i.name[:64], "rx_bps": i.rx_bps or 0,
                                     "tx_bps": i.tx_bps or 0, "errors_per_min": i.errors_per_min, "util_pct": i.util_pct})
-        async with sessionmaker()() as db:
+        updates: list[tuple[int, dict[str, Any], str | None]] = []
+        for st in store.devices.values():
+            if self.devices.get(st.id) is None:
+                continue
+            values: dict[str, Any] = {"last_seen": st.last_ok}
+            h = hashlib.md5(json.dumps(st.facts, sort_keys=True, default=str).encode()).hexdigest()
+            if h != self._facts_hash.get(st.id):
+                values["facts"] = st.facts
+            updates.append((st.id, values, h))
+
+        async def _write(db: AsyncSession) -> None:
             if dev_rows:
                 await db.execute(DeviceMetric.__table__.insert(), dev_rows)
             if if_rows:
                 await db.execute(InterfaceMetric.__table__.insert(), if_rows)
-            for st in store.devices.values():
-                dev = self.devices.get(st.id)
-                if dev is None:
-                    continue
-                values: dict[str, Any] = {"last_seen": st.last_ok}
-                h = hashlib.md5(json.dumps(st.facts, sort_keys=True, default=str).encode()).hexdigest()
-                if h != self._facts_hash.get(st.id):
-                    self._facts_hash[st.id] = h
-                    values["facts"] = st.facts
-                await db.execute(Device.__table__.update().where(Device.id == st.id).values(**values))
+            for dev_id, values, _ in updates:
+                await db.execute(Device.__table__.update().where(Device.id == dev_id).values(**values))
             await db.commit()
+
+        await with_retry(_write)
+        for dev_id, _, h in updates:  # only remember facts once they are really committed
+            self._facts_hash[dev_id] = h
 
     async def _retention_loop(self) -> None:
         s = get_settings()
@@ -331,13 +338,16 @@ class Poller:
         while True:
             try:
                 now = time.time()
-                async with sessionmaker()() as db:
-                    await db.execute(delete(DeviceMetric).where(DeviceMetric.ts < now - s.retention_days_metrics * 86400))
-                    await db.execute(delete(InterfaceMetric).where(InterfaceMetric.ts < now - s.retention_days_metrics * 86400))
-                    await db.execute(delete(LogEntry).where(LogEntry.ts < now - s.retention_days_logs * 86400))
-                    await db.execute(delete(Alert).where(Alert.resolved_at.is_not(None),
-                                                         Alert.resolved_at < now - s.retention_days_alerts * 86400))
-                    await db.commit()
+                metrics_cutoff = now - s.retention_days_metrics * 86400
+                removed = {
+                    "device metrics": await delete_in_chunks(DeviceMetric, DeviceMetric.ts < metrics_cutoff),
+                    "interface metrics": await delete_in_chunks(InterfaceMetric, InterfaceMetric.ts < metrics_cutoff),
+                    "logs": await delete_in_chunks(LogEntry, LogEntry.ts < now - s.retention_days_logs * 86400),
+                    "alerts": await delete_in_chunks(Alert, Alert.resolved_at.is_not(None)
+                                                     & (Alert.resolved_at < now - s.retention_days_alerts * 86400)),
+                }
+                if any(removed.values()):
+                    log.info("Retention cleanup removed %s", ", ".join(f"{n} {k}" for k, n in removed.items() if n))
             except Exception:  # noqa: BLE001
                 log.exception("Retention cleanup failed")
             await asyncio.sleep(3600)

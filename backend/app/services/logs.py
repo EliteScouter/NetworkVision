@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import insert
 
-from ..db import sessionmaker
+from ..db import with_retry
 from ..models import LogEntry
 from .bus import bus
 
@@ -66,7 +66,7 @@ class LogPipeline:
             first = await self.queue.get()
             batch = [first]
             deadline = time.monotonic() + 0.75
-            while len(batch) < 2000:
+            while len(batch) < 1000:  # modest batches keep Galera write sets small
                 timeout = deadline - time.monotonic()
                 if timeout <= 0:
                     break
@@ -75,10 +75,12 @@ class LogPipeline:
                 except TimeoutError:
                     break
             self.rate.append((time.time(), len(batch)))
+            async def _write(db, rows=batch):
+                await db.execute(insert(LogEntry), rows)
+                await db.commit()
+
             try:
-                async with sessionmaker()() as db:
-                    await db.execute(insert(LogEntry), batch)
-                    await db.commit()
+                await with_retry(_write)
             except Exception:  # noqa: BLE001 - never let the pipeline die
                 log.exception("Failed to persist %d log lines", len(batch))
             bus.publish({"type": "logs", "items": batch[-300:]})
