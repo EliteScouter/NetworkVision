@@ -51,6 +51,11 @@ class HttpCollector(Collector):
             raise CollectorError(f"Cannot connect to {self.base_url}: {e}") from e
         except httpx.TimeoutException as e:
             raise CollectorError(f"Timeout talking to {self.base_url}") from e
+        if r.is_redirect:
+            where = r.headers.get("location", "?")
+            raise CollectorError(
+                f"{self.base_url}{path} redirected (HTTP {r.status_code}) to {where} - "
+                "the scheme or port is probably wrong (e.g. http vs https, or the web GUI runs on another port)")
         if r.status_code in (401, 403):
             raise CollectorError(f"Authentication failed ({r.status_code}) for {path}")
         if r.status_code == 404:
@@ -60,7 +65,7 @@ class HttpCollector(Collector):
         try:
             return r.json()
         except ValueError as e:
-            raise CollectorError(f"Non-JSON response for {path}") from e
+            raise CollectorError(f"Non-JSON response for {path}: {describe_body(r)}") from e
 
     async def try_json(self, method: str, path: str, **kwargs: Any) -> Any:
         """Like request_json but returns None for optional endpoints that fail."""
@@ -77,6 +82,27 @@ class HttpCollector(Collector):
 
 class NotFound(CollectorError):
     pass
+
+
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def describe_body(r: httpx.Response) -> str:
+    """Explain an unexpected non-JSON reply (usually an HTML page from the wrong service/port)."""
+    ctype = r.headers.get("content-type", "unknown").split(";")[0]
+    text = r.text or ""
+    hint = ""
+    if "html" in ctype or text.lstrip().lower().startswith(("<!doctype", "<html")):
+        m = _TITLE.search(text)
+        title = " ".join(m.group(1).split())[:80] if m else ""
+        hint = f' - got an HTML page{f" titled {title!r}" if title else ""}'
+        if any(w in text.lower() for w in ("login", "password", "sign in")):
+            hint += "; it looks like a web login page, so the API isn't answering on this scheme/port"
+        else:
+            hint += "; another web server may be answering on this port"
+    elif not text.strip():
+        hint = " - the body was empty"
+    return f"HTTP {r.status_code}, content-type {ctype}{hint}"
 
 
 _NUM = re.compile(r"-?\d+(?:\.\d+)?")
