@@ -1,3 +1,4 @@
+import { Maximize2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useId, useMemo, useState } from "react";
 import { clock } from "../lib/format";
@@ -74,18 +75,25 @@ export interface Series {
   label: string;
   color: string;
   points: Pt[];
+  /** Thin dashed line without area fill (used for peak/max overlays). */
+  dashed?: boolean;
 }
 
-export function AreaChart({ series, height = 220, yFormat = (v) => v.toFixed(0), xFormat, empty = "Collecting data…" }: {
+export function AreaChart({ series, height = 220, yFormat = (v) => v.toFixed(0), xFormat, empty = "Collecting data…", onExpand, onSelectRange }: {
   series: Series[];
   height?: number;
   yFormat?: (v: number) => string;
   xFormat?: (t: number) => string;
   empty?: string;
+  /** Show an expand affordance; clicking the chart opens the history explorer. */
+  onExpand?: () => void;
+  /** Enable drag-to-zoom: called with the selected [t0, t1] window. */
+  onSelectRange?: (t0: number, t1: number) => void;
 }) {
   const uid = useId();
   const [ref, { width }] = useSize<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
+  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
   const padL = 56, padR = 12, padT = 10, padB = 22;
   const w = Math.max(0, width - padL - padR);
   const h = height - padT - padB;
@@ -99,16 +107,36 @@ export function AreaChart({ series, height = 220, yFormat = (v) => v.toFixed(0),
   const hoverIdx = hover;
 
   return (
-    <div ref={ref} className="relative w-full select-none" style={{ height }}>
+    <div ref={ref} className={`group/chart relative w-full select-none ${onExpand ? "cursor-zoom-in" : ""} ${onSelectRange ? "cursor-crosshair" : ""}`}
+      style={{ height }} onClick={() => !drag && onExpand?.()}>
       {!has && <div className="absolute inset-0 grid place-items-center font-mono text-xs text-faint">{empty}</div>}
+      {onExpand && (
+        <button type="button" aria-label="Open history" onClick={(e) => { e.stopPropagation(); onExpand(); }}
+          className="absolute top-0 right-0 z-10 rounded-md border border-edge bg-abyss/80 p-1 text-faint opacity-0 transition group-hover/chart:opacity-100 hover:text-cyan">
+          <Maximize2 size={13} />
+        </button>
+      )}
       {width > 0 && has && (
         <svg
           width={width}
           height={height}
-          onMouseLeave={() => setHover(null)}
+          onMouseLeave={() => { setHover(null); setDrag(null); }}
+          onMouseDown={(e) => {
+            if (!onSelectRange) return;
+            const x = e.clientX - (e.currentTarget as SVGSVGElement).getBoundingClientRect().left;
+            setDrag({ a: x, b: x });
+          }}
+          onMouseUp={() => {
+            if (drag && onSelectRange && Math.abs(drag.b - drag.a) > 8) {
+              const toT = (x: number) => x0 + ((Math.min(Math.max(x, padL), padL + w) - padL) / w) * (x1 - x0);
+              onSelectRange(toT(Math.min(drag.a, drag.b)), toT(Math.max(drag.a, drag.b)));
+            }
+            setDrag(null);
+          }}
           onMouseMove={(e) => {
             const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
             const x = e.clientX - r.left;
+            if (drag) setDrag({ ...drag, b: x });
             let best = 0, bd = Infinity;
             xs.forEach((t, i) => {
               const d = Math.abs(sx(t) - x);
@@ -147,11 +175,16 @@ export function AreaChart({ series, height = 220, yFormat = (v) => v.toFixed(0),
             const area = valid.length ? `${line}L${sx(valid[valid.length - 1][0])},${padT + h}L${sx(valid[0][0])},${padT + h}Z` : "";
             return (
               <g key={s.key}>
-                <motion.path d={area} fill={`url(#${uid}-${s.key})`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} />
-                <path d={line} fill="none" stroke={s.color} strokeWidth={1.8} style={{ filter: `drop-shadow(0 0 5px ${s.color}aa)` }} />
+                {!s.dashed && <motion.path d={area} fill={`url(#${uid}-${s.key})`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} />}
+                <path d={line} fill="none" stroke={s.color} strokeWidth={s.dashed ? 1 : 1.8} strokeDasharray={s.dashed ? "3 4" : undefined}
+                  strokeOpacity={s.dashed ? 0.6 : 1} style={s.dashed ? undefined : { filter: `drop-shadow(0 0 5px ${s.color}aa)` }} />
               </g>
             );
           })}
+          {drag && Math.abs(drag.b - drag.a) > 2 && (
+            <rect x={Math.min(drag.a, drag.b)} y={padT} width={Math.abs(drag.b - drag.a)} height={h}
+              fill="#22d3ee" fillOpacity={0.12} stroke="#22d3ee" strokeOpacity={0.5} />
+          )}
           {hoverIdx != null && xs[hoverIdx] != null && (
             <g>
               <line x1={sx(xs[hoverIdx])} x2={sx(xs[hoverIdx])} y1={padT} y2={padT + h} stroke="#22d3ee55" />

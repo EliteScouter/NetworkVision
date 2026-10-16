@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import {
   Bell,
+  Gauge,
   Gauge as GaugeIcon,
   LogOut,
   type LucideIcon,
@@ -9,6 +10,8 @@ import {
   ScrollText,
   Search,
   Server,
+  Users,
+  Wifi,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -19,12 +22,16 @@ import { useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
 import type { DeviceSummary } from "../lib/types";
 import { DeviceIcon } from "./DeviceIcon";
+import { HistoryExplorerHost } from "./HistoryExplorer";
 import { StatusDot } from "./ui";
 
 const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/", label: "Command Center", icon: GaugeIcon },
   { to: "/topology", label: "Topology", icon: Network },
   { to: "/devices", label: "Devices", icon: Server },
+  { to: "/clients", label: "Clients", icon: Users },
+  { to: "/wifi", label: "WiFi", icon: Wifi },
+  { to: "/speedtest", label: "Speedtest", icon: Gauge },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/alerts", label: "Alerts", icon: Bell },
   { to: "/integrations", label: "Integrations", icon: Plug },
@@ -310,6 +317,7 @@ export function Shell({ children, user, demo }: { children: ReactNode; user: str
         </nav>
       </div>
       <Toasts />
+      <HistoryExplorerHost />
       <CommandPalette open={palette} onClose={() => setPalette(false)} />
     </div>
   );

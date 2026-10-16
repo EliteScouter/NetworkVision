@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
-import type { Alert, DeviceSummary, LogItem } from "./types";
+import type { Alert, DeviceSummary, LogItem, SpeedProgress } from "./types";
 
 export interface Toast {
   id: number;
@@ -19,6 +19,8 @@ interface LiveState {
   logs: LogItem[];
   logsPaused: boolean;
   toasts: Toast[];
+  speed: SpeedProgress | null;
+  setSpeed: (p: SpeedProgress | null) => void;
   setConnected: (c: boolean) => void;
   setDevices: (list: DeviceSummary[]) => void;
   loadAlerts: () => Promise<void>;
@@ -41,6 +43,8 @@ export const useLive = create<LiveState>((set, get) => ({
   logs: [],
   logsPaused: false,
   toasts: [],
+  speed: null,
+  setSpeed: (speed) => set({ speed }),
   setConnected: (connected) => set({ connected }),
   setDevices: (list) => set({ devices: Object.fromEntries(list.map((d) => [d.id, d])), lastMessage: Date.now() }),
   loadAlerts: async () => {
@@ -94,6 +98,7 @@ export function connectLive(): () => void {
       if (msg.type === "state") s.setDevices(msg.devices);
       else if (msg.type === "alert") s.applyAlert(msg.event, msg.alert);
       else if (msg.type === "logs") s.addLogs(msg.items);
+      else if (msg.type === "speedtest") s.setSpeed(msg);
     };
     socket.onclose = () => {
       window.clearInterval(pingTimer);

@@ -72,7 +72,8 @@ class Settings(BaseSettings):
     # --- Collection -----------------------------------------------------------
     poll_interval: int = Field(default=15, ge=5)
     metrics_persist_interval: int = Field(default=60, ge=15)
-    retention_days_metrics: int = Field(default=7, ge=1)
+    retention_days_metrics: int = Field(default=7, ge=1)  # raw per-minute samples
+    retention_days_rollup: int = Field(default=365, ge=7)  # hourly rollups (long-range charts)
     retention_days_logs: int = Field(default=14, ge=1)
     retention_days_alerts: int = Field(default=90, ge=1)
     ping_privileged: bool = False

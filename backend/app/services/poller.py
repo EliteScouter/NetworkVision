@@ -18,10 +18,24 @@ from ..collectors.base import ChildSnapshot, Collector, CollectorError, Snapshot
 from ..collectors.ping import icmp_probe
 from ..config import get_settings
 from ..db import delete_in_chunks, sessionmaker, with_retry
-from ..models import Alert, Device, DeviceMetric, InterfaceMetric, LogEntry
+from ..models import (
+    Alert,
+    Device,
+    DeviceMetric,
+    DeviceMetricHourly,
+    GatewayMetric,
+    GatewayMetricHourly,
+    InterfaceMetric,
+    InterfaceMetricHourly,
+    LogEntry,
+    RadioMetric,
+    RadioMetricHourly,
+)
 from ..security import SecretError, decrypt_secrets, resolve_secret
+from . import history
 from .alerts import engine
 from .bus import bus
+from .clients import tracker as client_tracker
 from .keepass import keepass
 from .logs import pipeline
 from .state import DeviceState, store
@@ -87,7 +101,7 @@ class Poller:
             if d.parent_id is None:
                 self._spawn(d)
         self._housekeeping = [asyncio.create_task(c()) for c in (
-            self._persist_loop, self._retention_loop, self._broadcast_loop, self._expiry_loop)]
+            self._persist_loop, self._retention_loop, self._broadcast_loop, self._expiry_loop, self._rollup_loop)]
         log.info("Poller started with %d integrations", sum(1 for d in devices if d.parent_id is None))
 
     async def stop(self) -> None:
@@ -196,6 +210,7 @@ class Poller:
         st.poll_ms = round((time.perf_counter() - t0) * 1000, 1)
         if snap.reachable:
             st.apply(snap)
+            client_tracker.record(snap.clients)
         else:
             st.mark_down(snap.error or "unreachable")
             st.metrics.update({k: v for k, v in snap.metrics.items() if k in ("latency_ms", "loss_pct")})
@@ -313,6 +328,8 @@ class Poller:
         now = time.time()
         dev_rows: list[dict[str, Any]] = []
         if_rows: list[dict[str, Any]] = []
+        gw_rows: list[dict[str, Any]] = []
+        radio_rows: list[dict[str, Any]] = []
         for st in store.devices.values():
             if not st.enabled or st.status in ("unknown", "disabled") or st.id not in self.devices:
                 continue
@@ -326,6 +343,18 @@ class Poller:
                 if i.oper_up and (i.rx_bps is not None or i.errors_per_min):
                     if_rows.append({"ts": now, "device_id": st.id, "ifname": i.name[:64], "rx_bps": i.rx_bps or 0,
                                     "tx_bps": i.tx_bps or 0, "errors_per_min": i.errors_per_min, "util_pct": i.util_pct})
+            for g in st.gateways:
+                gw_rows.append({"ts": now, "device_id": st.id, "name": g.name[:64],
+                                "up": None if g.up is None else int(g.up), "latency_ms": g.latency_ms, "loss_pct": g.loss_pct})
+            for ap in (st.wifi or {}).get("aps", []):
+                ap_id = self.children.get((st.id, ap.get("mac", "")))
+                if ap_id is None or not ap.get("online"):
+                    continue
+                for r in ap.get("radios", []):
+                    radio_rows.append({"ts": now, "device_id": ap_id, "radio": str(r.get("band"))[:16],
+                                       "channel": r.get("channel"), "utilization": r.get("utilization"),
+                                       "interference": r.get("interference"), "clients": r.get("clients"),
+                                       "satisfaction": r.get("satisfaction"), "retries_pct": r.get("retries_pct")})
         updates: list[tuple[int, dict[str, Any], str | None]] = []
         for st in store.devices.values():
             if self.devices.get(st.id) is None:
@@ -341,6 +370,10 @@ class Poller:
                 await db.execute(DeviceMetric.__table__.insert(), dev_rows)
             if if_rows:
                 await db.execute(InterfaceMetric.__table__.insert(), if_rows)
+            if gw_rows:
+                await db.execute(GatewayMetric.__table__.insert(), gw_rows)
+            if radio_rows:
+                await db.execute(RadioMetric.__table__.insert(), radio_rows)
             for dev_id, values, _ in updates:
                 await db.execute(Device.__table__.update().where(Device.id == dev_id).values(**values))
             await db.commit()
@@ -349,6 +382,12 @@ class Poller:
         for dev_id, _, h in updates:  # only remember facts once they are really committed
             self._facts_hash[dev_id] = h
 
+    async def _rollup_loop(self) -> None:
+        await asyncio.sleep(90)
+        while True:
+            await history.rollup_all()
+            await asyncio.sleep(600)
+
     async def _retention_loop(self) -> None:
         s = get_settings()
         await asyncio.sleep(60)
@@ -356,9 +395,14 @@ class Poller:
             try:
                 now = time.time()
                 metrics_cutoff = now - s.retention_days_metrics * 86400
+                rollup_cutoff = now - s.retention_days_rollup * 86400
                 removed = {
                     "device metrics": await delete_in_chunks(DeviceMetric, DeviceMetric.ts < metrics_cutoff),
                     "interface metrics": await delete_in_chunks(InterfaceMetric, InterfaceMetric.ts < metrics_cutoff),
+                    "gateway metrics": await delete_in_chunks(GatewayMetric, GatewayMetric.ts < metrics_cutoff),
+                    "radio metrics": await delete_in_chunks(RadioMetric, RadioMetric.ts < metrics_cutoff),
+                    **{f"hourly {m.__tablename__}": await delete_in_chunks(m, m.ts < rollup_cutoff) for m in (
+                        DeviceMetricHourly, InterfaceMetricHourly, GatewayMetricHourly, RadioMetricHourly)},
                     "logs": await delete_in_chunks(LogEntry, LogEntry.ts < now - s.retention_days_logs * 86400),
                     "alerts": await delete_in_chunks(Alert, Alert.resolved_at.is_not(None)
                                                      & (Alert.resolved_at < now - s.retention_days_alerts * 86400)),

@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..services.clients import from_lease
 from ..syslog_parser import parse_syslog
 from .base import CollectorError, FieldSpec, Gateway, Interface, LogLine, Section, Snapshot, norm_mac
 from .http_base import TLS_FIELDS, HttpCollector, NotFound, first_number, pick
@@ -171,6 +172,10 @@ class OpnSenseCollector(HttpCollector):
             rows = kea.get("rows", []) if isinstance(kea, dict) else []
         if rows:
             snap.metrics["clients"] = sum(1 for r in rows if str(r.get("state", "active")) == "active")
+            snap.clients = [from_lease(str(pick(r, "mac", "hwaddr", default="")), str(pick(r, "address", default="")),
+                                       str(pick(r, "hostname", default="")), str(pick(r, "state", default="active")),
+                                       str(pick(r, "if_descr", "if", default="")), pick(r, "ends", "expire"))
+                            for r in rows if pick(r, "mac", "hwaddr")]
             snap.sections.append(Section(
                 id="dhcp", title="DHCP leases", columns=["IP", "MAC", "Hostname", "Interface", "State"],
                 rows=[[pick(r, "address"), pick(r, "mac", "hwaddr"), pick(r, "hostname", default=""),

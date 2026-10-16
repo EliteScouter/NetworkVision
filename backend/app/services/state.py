@@ -84,6 +84,8 @@ class DeviceState:
     alert_counts: dict[str, int] = field(default_factory=dict)
     history: deque = field(default_factory=lambda: deque(maxlen=HISTORY_POINTS))
     wan_override: list[str] = field(default_factory=list)  # from the device's "WAN interface(s)" setting
+    clients: list[dict[str, Any]] = field(default_factory=list)
+    wifi: dict[str, Any] = field(default_factory=dict)
     _counters: dict[str, tuple[float, Interface]] = field(default_factory=dict)
 
     def wan_interfaces(self) -> list[IfState]:
@@ -140,6 +142,7 @@ class DeviceState:
             self.facts = {**self.facts, **{k: v for k, v in snap.facts.items() if v not in (None, "")}}
         self.metrics = {k: v for k, v in snap.metrics.items() if v is not None}
         self.neighbors, self.gateways, self.sections = snap.neighbors, snap.gateways, snap.sections
+        self.clients, self.wifi = snap.clients, snap.wifi
 
         seen: set[str] = set()
         total_rx = total_tx = 0.0

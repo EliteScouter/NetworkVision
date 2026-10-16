@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -154,3 +155,97 @@ class Setting(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[float] = mapped_column(Float, default=now, onupdate=now)
+
+
+# --------------------------------------------------------------------------- #
+# Additional time series. Raw rows are kept NV_RETENTION_DAYS_METRICS; the
+# *_hourly rollups (avg + max per hour) are kept NV_RETENTION_DAYS_ROLLUP so long
+# ranges (30 days, a year) stay fast and small.
+# --------------------------------------------------------------------------- #
+class GatewayMetric(Base):
+    __tablename__ = "gateway_metrics"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Float)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(64))
+    up: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    loss_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (Index("ix_gwmetrics_dev_name_ts", "device_id", "name", "ts"),)
+
+
+class RadioMetric(Base):
+    """One WiFi radio (AP + band) sample."""
+
+    __tablename__ = "radio_metrics"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Float)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))  # the AP
+    radio: Mapped[str] = mapped_column(String(16))  # 2.4 | 5 | 6
+    channel: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    utilization: Mapped[float | None] = mapped_column(Float, nullable=True)
+    interference: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clients: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    satisfaction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    retries_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (Index("ix_radiometrics_dev_radio_ts", "device_id", "radio", "ts"),)
+
+
+class SpeedtestResult(Base):
+    __tablename__ = "speedtest_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Float, index=True)
+    engine: Mapped[str] = mapped_column(String(32), default="cloudflare")
+    trigger: Mapped[str] = mapped_column(String(16), default="schedule")  # schedule | manual
+    server: Mapped[str] = mapped_column(String(128), default="")
+    isp: Mapped[str] = mapped_column(String(128), default="")
+    public_ip: Mapped[str] = mapped_column(String(64), default="")
+    download_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    upload_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    jitter_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    loaded_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bytes_used: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+
+
+def _hourly(name: str, keys: dict[str, Any], values: list[str]) -> type:
+    """Build an hourly rollup model: keys + ts (hour start) + <value>_avg / <value>_max."""
+    attrs: dict[str, Any] = {
+        "__tablename__": name,
+        "id": mapped_column(BigId, primary_key=True, autoincrement=True),
+        "ts": mapped_column(Float),
+        "samples": mapped_column(Integer, default=0),
+        "__annotations__": {},
+    }
+    for k, col in keys.items():
+        attrs[k] = col
+    for v in values:
+        attrs[f"{v}_avg"] = mapped_column(Float, nullable=True)
+        attrs[f"{v}_max"] = mapped_column(Float, nullable=True)
+    attrs["__table_args__"] = (Index(f"ix_{name}_keys_ts", *keys.keys(), "ts"),)
+    return type(name.title().replace("_", ""), (Base,), attrs)
+
+
+DEVICE_VALUES = ["status", "cpu", "mem", "temp", "latency_ms", "loss_pct", "rx_bps", "tx_bps", "clients"]
+INTERFACE_VALUES = ["rx_bps", "tx_bps", "errors_per_min", "util_pct"]
+GATEWAY_VALUES = ["up", "latency_ms", "loss_pct"]
+RADIO_VALUES = ["utilization", "interference", "clients", "satisfaction", "retries_pct"]
+
+DeviceMetricHourly = _hourly("device_metrics_hourly", {
+    "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))}, DEVICE_VALUES)
+InterfaceMetricHourly = _hourly("interface_metrics_hourly", {
+    "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE")),
+    "ifname": mapped_column(String(64))}, INTERFACE_VALUES)
+GatewayMetricHourly = _hourly("gateway_metrics_hourly", {
+    "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE")),
+    "name": mapped_column(String(64))}, GATEWAY_VALUES)
+RadioMetricHourly = _hourly("radio_metrics_hourly", {
+    "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE")),
+    "radio": mapped_column(String(16))}, RADIO_VALUES)

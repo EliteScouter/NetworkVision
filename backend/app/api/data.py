@@ -33,6 +33,7 @@ async def overview() -> dict[str, Any]:
     wan_rx = wan_tx = 0.0
     gws = []
     wan_history: list = []
+    wan_primary: dict[str, Any] | None = None
     busiest = -1.0
     for d in edge:
         for i in d.wan_interfaces():
@@ -42,7 +43,8 @@ async def overview() -> dict[str, Any]:
             volume = sum((p[1] or 0) + (p[2] or 0) for p in i.history)
             if len(i.history) >= 2 and volume > busiest:
                 busiest, wan_history = volume, [list(p) for p in i.history]
-        gws += [{"device": d.name, "name": g.name, "up": g.up, "latency_ms": g.latency_ms, "loss_pct": g.loss_pct,
+                wan_primary = {"device_id": d.id, "device": d.name, "ifname": i.name}
+        gws += [{"device": d.name, "device_id": d.id, "name": g.name, "up": g.up, "latency_ms": g.latency_ms, "loss_pct": g.loss_pct,
                  "address": g.address} for g in d.gateways]
     controllers = [d for d in devs if d.role == "controller"]
     clients = sum(int(d.metrics.get("clients") or 0) for d in controllers) or \
@@ -57,7 +59,7 @@ async def overview() -> dict[str, Any]:
         "ts": time.time(),
         "devices": {"total": len(devs), **status},
         "alerts": {"total": len(alerts), **sev},
-        "wan": {"rx_bps": wan_rx, "tx_bps": wan_tx, "gateways": gws, "history": wan_history},
+        "wan": {"rx_bps": wan_rx, "tx_bps": wan_tx, "gateways": gws, "history": wan_history, "primary": wan_primary},
         "clients": clients,
         "throughput_bps": sum(d.rx_bps + d.tx_bps for d in devs),
         "ports": {"up": sum(1 for i in ports if i.oper_up), "total": len(ports),

@@ -15,6 +15,9 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__
 from .api import auth, data, devices, ws
+from .api import history as history_api
+from .api import network as network_api
+from .api import speedtest as speedtest_api
 from .collectors import registry
 from .config import get_settings
 from .db import dispose, init_db
@@ -25,6 +28,7 @@ from .services.keepass import keepass
 from .services.logs import pipeline
 from .services.mfa import mfa
 from .services.poller import poller
+from .services.speedtest import speedtest
 
 
 def _setup_logging() -> None:
@@ -57,15 +61,18 @@ async def lifespan(_: FastAPI):
     log_task = asyncio.create_task(pipeline.run(), name="log-pipeline")
     handles = await syslog.start()
     await poller.start()
+    await speedtest.load()
+    speed_task = asyncio.create_task(speedtest.scheduler(), name="speedtest-scheduler")
     try:
         yield
     finally:
         await poller.stop()
         for h in handles:
             h.close()
-        log_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await log_task
+        for task in (log_task, speed_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await dispose()
 
 
@@ -93,6 +100,9 @@ async def security_headers(request: Request, call_next):
 app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(data.router)
+app.include_router(history_api.router)
+app.include_router(network_api.router)
+app.include_router(speedtest_api.router)
 app.include_router(ws.router)
 
 

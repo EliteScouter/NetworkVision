@@ -71,3 +71,22 @@ def test_device_crud_never_leaks_secrets(client):
 def test_host_validation(client):
     r = client.post("/api/devices", json={"name": "x", "kind": "ping", "host": "http://evil/x"})
     assert r.status_code == 422
+
+
+def test_new_feature_endpoints(client):
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"}).status_code == 200
+    clients = client.get("/api/clients").json()
+    assert clients["counts"]["online"] > 0 and clients["clients"][0]["category"]
+    mac = clients["clients"][0]["mac"]
+    assert client.get(f"/api/clients/{mac}").json()["mac"] == mac
+    wifi = client.get("/api/wifi").json()
+    assert wifi["aps"] and wifi["ssids"] and wifi["summary"]["clients"] > 0
+    dev = next(d for d in client.get("/api/devices").json()["devices"] if d["kind"] == "demo")
+    h = client.get("/api/history/device", params={"device_id": dev["id"], "range": "30d"})
+    assert h.status_code == 200 and h.json()["resolution"] == "hourly"
+    assert client.get("/api/history/nope").status_code == 404
+    assert client.get("/api/history/device", params={"range": "1h"}).status_code == 422
+    st = client.get("/api/speedtest").json()
+    assert st["engine"] == "demo" and st["settings"]["interval_min"] == 60
+    r = client.put("/api/speedtest/settings", json={"interval_min": 240, "expected_down_mbps": 2000})
+    assert r.json()["settings"]["interval_min"] == 240

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..collectors import registry
 from ..db import get_session
-from ..models import Device, DeviceMetric, InterfaceMetric
+from ..models import Device
 from ..security import (
     SECRET_MASK,
     SecretError,
@@ -21,6 +21,7 @@ from ..security import (
     require_user,
     resolve_secret,
 )
+from ..services import history
 from ..services.keepass import keepass
 from ..services.poller import poller, run_collect
 from ..services.state import store
@@ -255,46 +256,14 @@ async def test_device(body: DeviceIn, device_id: int | None = Query(default=None
 
 
 # ---------------------------------------------------------------- time series
-RANGES = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800, "30d": 2592000}
-
-
-def _downsample(rows: list[tuple], start: float, span: float, fields: int, points: int = 240) -> list[list]:
-    if not rows:
-        return []
-    step = max(span / points, 1)
-    buckets: dict[int, list[list[float]]] = {}
-    for r in rows:
-        b = int((r[0] - start) // step)
-        acc = buckets.setdefault(b, [[] for _ in range(fields)])
-        for i in range(fields):
-            if r[i + 1] is not None:
-                acc[i].append(r[i + 1])
-    out = []
-    for b in sorted(buckets):
-        vals = buckets[b]
-        out.append([round(start + b * step + step / 2)] + [(sum(v) / len(v)) if v else None for v in vals])
-    return out
-
-
+# Kept for the device page's compact charts; both delegate to services/history (rollups, long ranges).
 @router.get("/devices/{device_id}/metrics")
-async def device_metrics(device_id: int, range_: str = Query("1h", alias="range"), db: AsyncSession = Depends(get_session)) -> dict:
-    span = RANGES.get(range_, 3600)
-    start = time.time() - span
-    cols = ["cpu", "mem", "temp", "latency_ms", "loss_pct", "rx_bps", "tx_bps", "clients", "status"]
-    q = select(DeviceMetric.ts, *[getattr(DeviceMetric, c) for c in cols]).where(
-        DeviceMetric.device_id == device_id, DeviceMetric.ts >= start).order_by(DeviceMetric.ts)
-    rows = (await db.execute(q)).all()
-    return {"columns": ["ts", *cols], "points": _downsample(rows, start, span, len(cols)), "range": range_}
+async def device_metrics(device_id: int, range_: str = Query("1h", alias="range")) -> dict:
+    start, end = history.resolve_range(range_, None, None)
+    return {**await history.query("device", {"device_id": device_id}, start, end, 240), "range": range_}
 
 
 @router.get("/devices/{device_id}/interfaces/metrics")
-async def interface_metrics(device_id: int, ifname: str, range_: str = Query("1h", alias="range"),
-                            db: AsyncSession = Depends(get_session)) -> dict:
-    span = RANGES.get(range_, 3600)
-    start = time.time() - span
-    q = select(InterfaceMetric.ts, InterfaceMetric.rx_bps, InterfaceMetric.tx_bps, InterfaceMetric.errors_per_min,
-               InterfaceMetric.util_pct).where(InterfaceMetric.device_id == device_id, InterfaceMetric.ifname == ifname,
-                                               InterfaceMetric.ts >= start).order_by(InterfaceMetric.ts)
-    rows = (await db.execute(q)).all()
-    return {"columns": ["ts", "rx_bps", "tx_bps", "errors_per_min", "util_pct"],
-            "points": _downsample(rows, start, span, 4), "range": range_}
+async def interface_metrics(device_id: int, ifname: str, range_: str = Query("1h", alias="range")) -> dict:
+    start, end = history.resolve_range(range_, None, None)
+    return {**await history.query("interface", {"device_id": device_id, "ifname": ifname}, start, end, 240), "range": range_}

@@ -285,6 +285,12 @@ class DemoCollector(Collector):
                 "Guest[Pixel-8] connected to SSID \"Guests\"",
                 "AP[U6-Mesh Garage] was disconnected", "Switch[Core-10G] port 5 STP state forwarding",
             ]), 6, "evt", "unifi"))
+        from .demo_wifi import demo_unifi_data  # local import: demo_wifi imports the UniFi collector
+
+        offline_aps = {c.name for c in s.children if not c.reachable}
+        s.clients, s.wifi = demo_unifi_data({c.name: c.external_id for c in s.children},
+                                            mac_for("unifi", "Core-10G"), offline_aps)
+        s.metrics["clients"] = sum(1 for c in s.clients if c["online"])
         s.sections = [Section("networks", "Networks / VLANs", ["Name", "Purpose", "VLAN", "Subnet", "DHCP", "Enabled"], [
             ["LAN", "corporate", "", "10.0.0.1/24", False, True], ["IoT", "corporate", 30, "10.0.30.1/24", False, True],
             ["Lab", "corporate", 50, "10.0.50.1/24", False, True], ["Guests", "guest", 70, "10.0.70.1/24", True, True]])]

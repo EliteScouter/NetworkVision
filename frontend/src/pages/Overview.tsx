@@ -6,6 +6,7 @@ import {
   Bell,
   Cable,
   ChevronRight,
+  Gauge as SpeedIcon,
   Globe,
   type LucideIcon,
   Network,
@@ -22,9 +23,10 @@ import { DeviceIcon } from "../components/DeviceIcon";
 import { TopologyGraph } from "../components/TopologyGraph";
 import { Badge, CountUp, Empty, Meter, Panel, StatusDot } from "../components/ui";
 import { ago, bps, bpsParts, clock, deviceColor, ms, SEV_NAMES, sevColor, utilColor } from "../lib/format";
+import { useHistory } from "../components/HistoryExplorer";
 import { useApi, useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
-import type { Overview, Topology } from "../lib/types";
+import type { Overview, SpeedStatus, Topology } from "../lib/types";
 
 function Kpi({ icon: Icon, label, children, sub, tone = "#22d3ee", delay = 0, to }: {
   icon: LucideIcon;
@@ -69,6 +71,8 @@ function Bps({ v }: { v: number }) {
 export default function OverviewPage() {
   const { data: ov } = useApi<Overview>("/overview", 5000);
   const { data: topo } = useApi<Topology>("/topology", 10000);
+  const { data: speed } = useApi<SpeedStatus>("/speedtest", 60000);
+  const openHistory = useHistory((s) => s.open);
   const devices = useLive((s) => s.devices);
   const logs = useLive((s) => s.logs);
   const alerts = useLive((s) => s.alerts);
@@ -134,11 +138,12 @@ export default function OverviewPage() {
           <span className="num">{primaryGw?.latency_ms != null ? primaryGw.latency_ms.toFixed(1) : "—"}</span>
           <span className="ml-1 text-sm text-dim">ms</span>
         </Kpi>
-        <Kpi icon={Users} label="Clients" delay={0.17} tone="#38bdf8" sub="active leases / associations">
+        <Kpi icon={Users} label="Clients" to="/clients" delay={0.17} tone="#38bdf8" sub="online now · click for details">
           <CountUp value={ov?.clients ?? 0} />
         </Kpi>
-        <Kpi icon={Cable} label="Fabric throughput" delay={0.2} tone="#a78bfa" sub="sum of all monitored ports">
-          <Bps v={ov?.throughput_bps ?? 0} />
+        <Kpi icon={SpeedIcon} label="Speed test" to="/speedtest" delay={0.2} tone="#a78bfa"
+          sub={speed?.last ? <>↑ {bps(speed.last.upload_bps)} · {speed.last.latency_ms?.toFixed(1)} ms · {ago(speed.last.ts)}</> : "no test yet"}>
+          {speed?.last ? <Bps v={speed.last.download_bps ?? 0} /> : <span className="text-dim">—</span>}
         </Kpi>
         <Kpi icon={ScrollText} label="Log rate" to="/logs" delay={0.23} tone="#fbbf24" sub={`${ov?.ports.errors ?? 0} ports with errors`}>
           <CountUp value={ov?.logs_per_min ?? 0} />
@@ -181,14 +186,24 @@ export default function OverviewPage() {
       {/* WAN chart + gateways */}
       <Panel className="col-span-12 xl:col-span-8" title="Internet throughput" icon={<Globe size={15} />} delay={0.2}
         actions={<div className="flex gap-3 text-xs"><span className="flex items-center gap-1.5 text-dim"><i className="h-2 w-2 rounded-full bg-cyan" />Down</span><span className="flex items-center gap-1.5 text-dim"><i className="h-2 w-2 rounded-full bg-magenta" />Up</span></div>}>
-        <AreaChart series={wanSeries} height={230} yFormat={(v) => bps(v, 0)} empty="Waiting for WAN samples…" />
+        <AreaChart series={wanSeries} height={230} yFormat={(v) => bps(v, 0)} empty="Waiting for WAN samples…"
+          onExpand={ov?.wan.primary ? () => openHistory({
+            kind: "interface", unit: "bps", title: `Internet · ${ov.wan.primary!.device} ${ov.wan.primary!.ifname}`,
+            filters: { device_id: ov.wan.primary!.device_id, ifname: ov.wan.primary!.ifname },
+            series: [{ key: "rx_bps", label: "Download", color: "#22d3ee" }, { key: "tx_bps", label: "Upload", color: "#f472b6" }],
+          }) : undefined} />
       </Panel>
 
       <Panel className="col-span-12 xl:col-span-4" title="Gateways" icon={<Activity size={15} />} delay={0.22}>
         <div className="space-y-2">
           {!ov?.wan.gateways.length && <Empty title="No gateways">Add pfSense, OPNsense or UniFi to see WAN gateways.</Empty>}
           {ov?.wan.gateways.map((g) => (
-            <div key={`${g.device}-${g.name}`} className="flex items-center gap-3 rounded-xl border border-edge bg-black/20 p-3">
+            <button key={`${g.device}-${g.name}`} type="button" disabled={g.device_id == null}
+              onClick={() => g.device_id != null && openHistory({
+                kind: "gateway", unit: "ms", title: `Gateway ${g.name} · ${g.device}`, filters: { device_id: g.device_id, name: g.name },
+                series: [{ key: "latency_ms", label: "Latency", color: "#a78bfa" }],
+              })}
+              className="flex w-full items-center gap-3 rounded-xl border border-edge bg-black/20 p-3 text-left transition enabled:hover:border-cyan/40">
               <StatusDot status={g.up === false ? "down" : (g.loss_pct ?? 0) > 5 ? "degraded" : "up"} health={g.up === false ? "critical" : "ok"} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{g.name}</div>
@@ -198,7 +213,7 @@ export default function OverviewPage() {
                 <div className="num text-sm" style={{ color: (g.latency_ms ?? 0) > 100 ? "#fbbf24" : "#e6f1ff" }}>{ms(g.latency_ms)}</div>
                 <div className={clsx("num text-[11px]", (g.loss_pct ?? 0) > 0 ? "text-warn" : "text-faint")}>{(g.loss_pct ?? 0).toFixed(1)}% loss</div>
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </Panel>

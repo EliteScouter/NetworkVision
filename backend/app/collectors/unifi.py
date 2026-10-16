@@ -9,10 +9,12 @@ UniFi Network 9+ also supports an API key (Settings > Control Plane > Integratio
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
 
+from ..services.clients import BAND, from_unifi, wifi_standard
 from .base import (
     ChildSnapshot,
     CollectorError,
@@ -30,6 +32,7 @@ from .http_base import TLS_FIELDS, HttpCollector, NotFound, first_number
 ROLE_BY_TYPE = {"usw": "switch", "uap": "ap", "ugw": "router", "udm": "router", "uxg": "router",
                 "ucg": "router", "uck": "controller", "ubb": "bridge", "uph": "phone"}
 GATEWAY_TYPES = {"ugw", "udm", "uxg", "ucg"}
+KNOWN_CLIENT_DAYS = 30  # offline clients seen within this window stay in the inventory
 STATE = {0: "disconnected", 1: "connected", 2: "pending", 4: "upgrading", 5: "provisioning",
          6: "heartbeat missed", 7: "adopting", 9: "adoption failed", 10: "isolated", 11: "rf scanning"}
 
@@ -60,6 +63,7 @@ class UnifiCollector(HttpCollector):
     def __init__(self, host: str, config: dict[str, Any], secrets: dict[str, Any]) -> None:
         super().__init__(host, config, secrets)
         self._prefix: str | None = None
+        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._csrf: str | None = None
         self._logged_in = False
 
@@ -193,16 +197,27 @@ class UnifiCollector(HttpCollector):
                 rows=[[n.get("name"), n.get("purpose"), n.get("vlan", "") if n.get("vlan_enabled") else "",
                        n.get("ip_subnet", ""), bool(n.get("dhcpd_enabled")), n.get("enabled", True)] for n in networks],
             ))
-        if clients:
-            top = sorted(clients, key=lambda c: (c.get("tx_bytes", 0) or 0) + (c.get("rx_bytes", 0) or 0), reverse=True)
-            snap.sections.append(Section(
-                id="clients", title=f"Clients ({len(clients)})",
-                columns=["Name", "IP", "MAC", "Network", "Connection", "Signal", "Rx", "Tx"],
-                rows=[[c.get("name") or c.get("hostname") or "", c.get("ip", ""), c.get("mac", ""),
-                       c.get("network", ""), ("wired" if c.get("is_wired") else c.get("essid", "wifi")),
-                       c.get("signal", ""), c.get("rx_bytes", 0), c.get("tx_bytes", 0)] for c in top[:300]],
-            ))
+        # Slow-changing lists are refreshed every few minutes, not every poll.
+        known = await self._cached("rest/user")
+        wlans = await self._cached("rest/wlanconf")
+        neighbors = await self._cached("stat/rogueap?within=24")
+        net_names = {n.get("_id", ""): n.get("name", "") for n in networks}
+
+        online = {norm_mac(c.get("mac")) for c in clients}
+        snap.clients = [from_unifi(c, True, net_names) for c in clients]
+        horizon = time.time() - KNOWN_CLIENT_DAYS * 86400
+        snap.clients += [from_unifi(u, False, net_names) for u in known
+                         if norm_mac(u.get("mac")) not in online and (u.get("last_seen") or 0) >= horizon]
+        snap.wifi = build_wifi(devices, wlans, neighbors, clients, net_names)
         return snap
+
+    async def _cached(self, path: str, ttl: float = 300) -> list[dict[str, Any]]:
+        hit = self._cache.get(path)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        data = await self.api(path)
+        self._cache[path] = (time.time(), data)
+        return data
 
     def _child(self, d: dict[str, Any]) -> ChildSnapshot:
         mac = norm_mac(d.get("mac", ""))
@@ -274,3 +289,90 @@ def _max_temp(temps: Any) -> float | None:
     vals = [first_number(t.get("value")) for t in temps or [] if isinstance(t, dict)]
     vals = [v for v in vals if v is not None]
     return max(vals) if vals else None
+
+
+def _n(v: Any) -> float | None:
+    try:
+        return None if v in (None, "") else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_wifi(devices: list[dict[str, Any]], wlans: list[dict[str, Any]], neighbors: list[dict[str, Any]],
+               clients: list[dict[str, Any]], net_names: dict[str, str]) -> dict[str, Any]:
+    """Normalize everything the WiFi dashboard needs from one UniFi site."""
+    aps = []
+    for d in devices:
+        if d.get("type") != "uap":
+            continue
+        cfg = {r.get("name"): r for r in d.get("radio_table", []) or []}
+        radios = []
+        for rs in d.get("radio_table_stats", []) or []:
+            rc = cfg.get(rs.get("name"), {})
+            band = BAND.get(str(rs.get("radio") or rc.get("radio") or "").lower(), str(rs.get("radio")))
+            util, srx, stx = _n(rs.get("cu_total")), _n(rs.get("cu_self_rx")) or 0, _n(rs.get("cu_self_tx")) or 0
+            proto = "be" if rc.get("is_11be") else "ax" if rc.get("is_11ax") else "ac" if rc.get("is_11ac") else "n"
+            radios.append({
+                "name": rs.get("name"), "band": band, "channel": rs.get("channel"),
+                "width": _n(rs.get("bw")) or _n(rc.get("ht")), "extchannel": rs.get("extchannel"),
+                "tx_power": _n(rs.get("tx_power")), "tx_power_mode": rc.get("tx_power_mode"),
+                "min_tx_power": _n(rc.get("min_txpower")), "max_tx_power": _n(rc.get("max_txpower")),
+                "utilization": util, "self_rx": srx, "self_tx": stx,
+                # Airtime used by *other* networks/noise = total busy minus our own rx/tx.
+                "interference": max(0.0, util - srx - stx) if util is not None else None,
+                "clients": rs.get("num_sta"), "satisfaction": _n(rs.get("satisfaction")),
+                "retries_pct": _n(rs.get("tx_retries_pct")), "dfs": bool(rc.get("has_dfs")),
+                "standard": wifi_standard(proto, band), "nss": rc.get("nss"), "antenna_gain": _n(rc.get("antenna_gain")),
+            })
+        vaps = [{
+            "ssid": v.get("essid"), "bssid": norm_mac(v.get("bssid")), "band": BAND.get(str(v.get("radio") or "").lower()),
+            "channel": v.get("channel"), "clients": v.get("num_sta"), "satisfaction": _n(v.get("satisfaction")),
+            "avg_signal": _n(v.get("avg_client_signal")), "tx_bytes": _n(v.get("tx_bytes")), "rx_bytes": _n(v.get("rx_bytes")),
+            "tx_retries": _n(v.get("tx_retries")), "tx_dropped": _n(v.get("tx_dropped")), "is_guest": bool(v.get("is_guest")),
+            "wlan_id": v.get("wlanconf_id"), "up": v.get("up", True),
+        } for v in d.get("vap_table", []) or []]
+        up = d.get("uplink") or {}
+        aps.append({
+            "mac": norm_mac(d.get("mac")), "name": d.get("name") or d.get("model"), "model": d.get("model"),
+            "ip": d.get("ip"), "online": d.get("state") == 1, "uptime_s": _n(d.get("uptime")),
+            "version": d.get("version"), "satisfaction": _n(d.get("satisfaction")), "clients": d.get("num_sta"),
+            "tx_bytes": _n(d.get("tx_bytes")), "rx_bytes": _n(d.get("rx_bytes")),
+            "uplink": {"name": up.get("uplink_device_name") or "", "port": up.get("uplink_remote_port"),
+                       "speed": up.get("speed"), "type": up.get("type")},
+            "radios": radios, "vaps": vaps,
+        })
+
+    per_wlan: dict[str, dict[str, Any]] = {}
+    for ap in aps:
+        for v in ap["vaps"]:
+            w = per_wlan.setdefault(v.get("wlan_id") or v.get("ssid") or "", {"clients": 0, "bands": {}, "sat": []})
+            w["clients"] += v.get("clients") or 0
+            if v.get("band"):
+                w["bands"][v["band"]] = w["bands"].get(v["band"], 0) + (v.get("clients") or 0)
+            if v.get("satisfaction") is not None and v.get("clients"):
+                w["sat"].append((v["satisfaction"], v["clients"]))
+    ssids = []
+    for w in wlans:
+        agg = per_wlan.get(w.get("_id", ""), {"clients": 0, "bands": {}, "sat": []})
+        weight = sum(n for _, n in agg["sat"])
+        ssids.append({
+            "id": w.get("_id"), "name": w.get("name"), "enabled": w.get("enabled", True), "security": w.get("security"),
+            "wpa_mode": w.get("wpa_mode"), "hidden": bool(w.get("hide_ssid")), "guest": bool(w.get("is_guest")),
+            "bands": w.get("wlan_bands") or ([w["wlan_band"]] if w.get("wlan_band") else []),
+            "network": net_names.get(w.get("networkconf_id", ""), ""), "fast_roaming": bool(w.get("fast_roaming_enabled")),
+            "pmf": w.get("pmf_mode"), "mlo": bool(w.get("mlo_enabled")), "l2_isolation": bool(w.get("l2_isolation")),
+            "clients": agg["clients"], "clients_by_band": agg["bands"],
+            "satisfaction": sum(s * n for s, n in agg["sat"]) / weight if weight else None,
+        })
+
+    seen = []
+    for n in sorted(neighbors, key=lambda x: -(_n(x.get("signal")) or -200))[:500]:
+        seen.append({
+            "bssid": norm_mac(n.get("bssid")), "ssid": n.get("essid") or "",
+            "band": BAND.get(str(n.get("band") or n.get("radio") or "").lower()),
+            "channel": n.get("channel"), "width": _n(n.get("bw")), "signal": _n(n.get("signal")),
+            "security": n.get("security"), "seen_by": n.get("ap_name") or "", "last_seen": _n(n.get("last_seen")),
+            "is_rogue": bool(n.get("is_rogue")), "vendor": n.get("oui") or "",
+        })
+    wireless = [c for c in clients if not c.get("is_wired")]
+    return {"aps": aps, "ssids": ssids, "neighbors": seen, "wireless_clients": len(wireless), "updated": time.time()}

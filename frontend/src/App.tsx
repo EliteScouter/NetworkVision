@@ -6,13 +6,16 @@ import { api, setUnauthorizedHandler } from "./lib/api";
 import { connectLive, useLive } from "./lib/store";
 import type { Meta } from "./lib/types";
 import AlertsPage from "./pages/Alerts";
+import ClientsPage from "./pages/Clients";
 import DeviceDetailPage from "./pages/DeviceDetail";
 import DevicesPage from "./pages/Devices";
 import IntegrationsPage from "./pages/Integrations";
 import LoginPage from "./pages/Login";
 import LogsPage from "./pages/Logs";
 import OverviewPage from "./pages/Overview";
+import SpeedtestPage from "./pages/Speedtest";
 import TopologyPage from "./pages/Topology";
+import WifiPage from "./pages/Wifi";
 
 type Me = { user: string | null; auth_disabled: boolean; configured: boolean };
 
@@ -31,6 +34,9 @@ function Authed({ me }: { me: Me }) {
         <Route path="/topology" element={<TopologyPage />} />
         <Route path="/devices" element={<DevicesPage />} />
         <Route path="/devices/:id" element={<DeviceDetailPage />} />
+        <Route path="/clients" element={<ClientsPage />} />
+        <Route path="/wifi" element={<WifiPage />} />
+        <Route path="/speedtest" element={<SpeedtestPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/integrations" element={<IntegrationsPage meta={meta} />} />

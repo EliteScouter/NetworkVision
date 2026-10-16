@@ -187,8 +187,9 @@ export interface Overview {
   wan: {
     rx_bps: number;
     tx_bps: number;
-    gateways: (Gateway & { device: string })[];
+    gateways: (Gateway & { device: string; device_id?: number })[];
     history: [number, number | null, number | null][];
+    primary: { device_id: number; device: string; ifname: string } | null;
   };
   clients: number;
   throughput_bps: number;
@@ -220,3 +221,149 @@ export interface Meta {
   retention: { metrics_days: number; logs_days: number };
   thresholds: Record<string, number>;
 }
+
+// ------------------------------------------------------------------ history
+export type HistoryKind = "device" | "interface" | "gateway" | "radio" | "speedtest";
+
+export interface HistoryTarget {
+  kind: HistoryKind;
+  title: string;
+  /** Filters for the series (device_id, ifname, name, radio). */
+  filters?: Record<string, string | number>;
+  /** Which columns to plot and how. */
+  series: { key: string; label: string; color: string }[];
+  unit: "bps" | "pct" | "ms" | "count" | "raw";
+}
+
+export interface HistoryResponse {
+  kind: HistoryKind;
+  since: number;
+  until: number;
+  resolution: "raw" | "hourly";
+  columns: string[];
+  points: (number | null)[][];
+  peaks: (number | null)[][];
+  stats: Record<string, { min: number | null; avg: number | null; max: number | null; p95: number | null; last: number | null; total_bytes?: number | null }>;
+  samples: number;
+}
+
+// ------------------------------------------------------------------ clients
+export interface Client {
+  mac: string;
+  display_name: string;
+  name?: string;
+  hostname?: string;
+  ip?: string;
+  ipv6?: string[];
+  vendor?: string;
+  network?: string;
+  vlan?: number | null;
+  category: string;
+  online: boolean;
+  wired?: boolean;
+  is_guest?: boolean;
+  fixed_ip?: boolean;
+  uplink_mac?: string;
+  uplink_name?: string;
+  uplink_device_id?: number;
+  sw_port?: number | null;
+  wired_rate_mbps?: number | null;
+  ssid?: string;
+  bssid?: string;
+  band?: string | null;
+  radio_proto?: string | null;
+  standard?: string | null;
+  channel?: number | null;
+  channel_width?: number | null;
+  signal?: number | null;
+  rssi?: number | null;
+  noise?: number | null;
+  snr?: number | null;
+  tx_rate_mbps?: number | null;
+  rx_rate_mbps?: number | null;
+  nss?: number | null;
+  retries_pct?: number | null;
+  satisfaction?: number | null;
+  satisfaction_reason?: unknown;
+  anomalies?: unknown;
+  powersave?: boolean | null;
+  fast_roaming?: boolean | null;
+  mlo?: boolean | null;
+  down_bps?: number;
+  up_bps?: number;
+  down_bytes?: number | null;
+  up_bytes?: number | null;
+  uptime_s?: number | null;
+  assoc_time?: number | null;
+  first_seen?: number | null;
+  last_seen?: number | null;
+  idle_s?: number | null;
+  dhcp_end?: number | null;
+  lease?: { state: string; interface: string; expires: unknown };
+  sources: string[];
+  via: string[];
+  history?: [number, number, number][];
+}
+
+export interface ClientsResponse {
+  clients: Client[];
+  counts: {
+    total: number; online: number; offline: number; wired: number; wireless: number;
+    by_band: Record<string, number>; by_network: Record<string, number>; by_category: Record<string, number>;
+  };
+}
+
+// --------------------------------------------------------------------- wifi
+export interface Radio {
+  name: string; band: string; channel: number | null; width: number | null; tx_power: number | null; tx_power_mode?: string;
+  min_tx_power?: number | null; max_tx_power?: number | null;
+  utilization: number | null; self_rx: number; self_tx: number; interference: number | null;
+  clients: number | null; satisfaction: number | null; retries_pct: number | null; dfs: boolean; standard: string | null;
+}
+export interface Vap {
+  ssid: string; bssid: string; band: string | null; channel: number | null; clients: number | null;
+  satisfaction: number | null; avg_signal: number | null; tx_bytes: number | null; rx_bytes: number | null; is_guest: boolean;
+}
+export interface AccessPoint {
+  mac: string; name: string; model: string; ip: string; online: boolean; uptime_s: number | null; version: string;
+  satisfaction: number | null; clients: number | null; device_id: number | null; controller: string;
+  uplink: { name: string; port: number | null; speed: number | null; type: string | null };
+  radios: Radio[]; vaps: Vap[];
+}
+export interface Ssid {
+  id: string; name: string; enabled: boolean; security: string; wpa_mode?: string; hidden: boolean; guest: boolean;
+  bands: string[]; network: string; fast_roaming: boolean; pmf: string; mlo: boolean; l2_isolation: boolean;
+  clients: number; clients_by_band: Record<string, number>; satisfaction: number | null;
+}
+export interface Neighbor {
+  bssid: string; ssid: string; band: string | null; channel: number | null; width: number | null; signal: number | null;
+  security: string; seen_by: string; last_seen: number | null; is_rogue: boolean; vendor: string;
+}
+export interface WifiResponse {
+  controllers: { id: number; name: string; updated: number }[];
+  aps: AccessPoint[];
+  ssids: Ssid[];
+  neighbors: Neighbor[];
+  clients: Client[];
+  summary: {
+    aps_total: number; aps_online: number; clients: number; ssids: number; satisfaction: number | null; avg_signal: number | null;
+    busiest_radio: Radio | null; neighbors: number; by_band: Record<string, number>; by_standard: Record<string, number>;
+    by_signal: Record<string, number>; channel_load: Record<string, Record<string, number>>;
+  };
+}
+
+// ---------------------------------------------------------------- speedtest
+export interface SpeedResult {
+  id: number; ts: number; engine: string; trigger: string; server: string; isp: string; public_ip: string;
+  download_bps: number | null; upload_bps: number | null; latency_ms: number | null; jitter_ms: number | null;
+  loaded_latency_ms: number | null; bytes_used: number | null; duration_s: number | null; error: string;
+}
+export interface SpeedSettings {
+  enabled: boolean; interval_min: number; duration_s: number; streams: number;
+  expected_down_mbps: number | null; expected_up_mbps: number | null; alert_pct: number;
+}
+export interface SpeedStatus {
+  settings: SpeedSettings; engine: string; running: boolean; progress: SpeedProgress | Record<string, never>;
+  next_run: number | null; last: SpeedResult | null; recent: SpeedResult[];
+}
+export interface SpeedProgress { state?: string; phase?: string; mbps?: number; progress?: number; result?: SpeedResult }

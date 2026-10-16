@@ -28,6 +28,7 @@ import { DeviceIcon, ROLE_LABEL } from "../components/DeviceIcon";
 import { Badge, Drawer, Empty, Kv, Meter, Panel, Segmented, Spinner, StatusDot } from "../components/ui";
 import { api } from "../lib/api";
 import { ago, bps, clock, deviceColor, duration, ms, pct, SEV_NAMES, sevColor, speed, utilColor } from "../lib/format";
+import { useHistory } from "../components/HistoryExplorer";
 import { useApi, useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
 import type { Alert, DeviceDetail, Iface, LogItem } from "../lib/types";
@@ -115,6 +116,7 @@ function SectionTable({ s }: { s: DeviceDetail["sections"][number] }) {
 
 function IfaceDrawer({ deviceId, iface, onClose }: { deviceId: number; iface: Iface | null; onClose: () => void }) {
   const [range, setRange] = useState<Range>("live");
+  const openHistory = useHistory((s) => s.open);
   const { data } = useApi<{ points: (number | null)[][] }>(iface && range !== "live" ? `/devices/${deviceId}/interfaces/metrics` : null, 30000,
     iface ? { ifname: iface.name, range } : undefined);
   const series: Series[] = useMemo(() => {
@@ -133,7 +135,10 @@ function IfaceDrawer({ deviceId, iface, onClose }: { deviceId: number; iface: If
             <Badge tone={iface.oper_up ? "up" : "down"}>{iface.oper_up ? "link up" : "link down"}</Badge>
             <Segmented value={range} onChange={setRange} options={(["live", "1h", "6h", "24h", "7d"] as Range[]).map((r) => ({ value: r, label: r }))} />
           </div>
-          <AreaChart series={series} height={240} yFormat={(v) => bps(v, 0)} />
+          <AreaChart series={series} height={240} yFormat={(v) => bps(v, 0)}
+            onExpand={() => openHistory({ kind: "interface", unit: "bps", title: `${iface.name}${iface.alias ? ` (${iface.alias})` : ""}`,
+              filters: { device_id: deviceId, ifname: iface.name },
+              series: [{ key: "rx_bps", label: "Rx", color: "#22d3ee" }, { key: "tx_bps", label: "Tx", color: "#f472b6" }] })} />
           <div className="grid grid-cols-2 gap-x-6">
             <Kv k="Speed" v={speed(iface.speed_mbps)} />
             <Kv k="Utilization" v={pct(iface.util_pct, 1)} />
@@ -168,6 +173,7 @@ export default function DeviceDetailPage() {
   const { data: alertHist } = useApi<{ items: Alert[] }>(`/alerts`, 30000, { state: "all", device_id: Number(id), limit: 30 });
   const liveAlerts = useLive((s) => s.alerts);
   const [iface, setIface] = useState<Iface | null>(null);
+  const openHistory = useHistory((s) => s.open);
   const [ifq, setIfq] = useState("");
   const [onlyUp, setOnlyUp] = useState(false);
   const [section, setSection] = useState<string | null>(null);
@@ -268,9 +274,15 @@ export default function DeviceDetailPage() {
       <Panel title="Performance" icon={<Activity size={15} />}
         actions={<Segmented value={range} onChange={setRange} options={(["live", "1h", "6h", "24h", "7d"] as Range[]).map((r) => ({ value: r, label: r }))} />}>
         <div className="grid gap-5 lg:grid-cols-3">
-          <div><div className="hud-label mb-1">Traffic</div><AreaChart series={series!.traffic} height={190} yFormat={(v) => bps(v, 0)} /></div>
-          {hasSys && <div><div className="hud-label mb-1">CPU / Memory %</div><AreaChart series={series!.sys} height={190} yFormat={(v) => `${v.toFixed(0)}%`} /></div>}
-          {hasLatency && <div><div className="hud-label mb-1">Latency</div><AreaChart series={series!.latency} height={190} yFormat={(v) => `${v.toFixed(0)}ms`} /></div>}
+          <div><div className="hud-label mb-1">Traffic</div><AreaChart series={series!.traffic} height={190} yFormat={(v) => bps(v, 0)}
+            onExpand={() => openHistory({ kind: "device", unit: "bps", title: `${d.name} · traffic`, filters: { device_id: d.id },
+              series: [{ key: "rx_bps", label: "Rx", color: "#22d3ee" }, { key: "tx_bps", label: "Tx", color: "#f472b6" }] })} /></div>
+          {hasSys && <div><div className="hud-label mb-1">CPU / Memory %</div><AreaChart series={series!.sys} height={190} yFormat={(v) => `${v.toFixed(0)}%`}
+            onExpand={() => openHistory({ kind: "device", unit: "pct", title: `${d.name} · CPU & memory`, filters: { device_id: d.id },
+              series: [{ key: "cpu", label: "CPU", color: "#22d3ee" }, { key: "mem", label: "Memory", color: "#a78bfa" }, { key: "temp", label: "Temp °C", color: "#fb4d6d" }] })} /></div>}
+          {hasLatency && <div><div className="hud-label mb-1">Latency</div><AreaChart series={series!.latency} height={190} yFormat={(v) => `${v.toFixed(0)}ms`}
+            onExpand={() => openHistory({ kind: "device", unit: "ms", title: `${d.name} · latency`, filters: { device_id: d.id },
+              series: [{ key: "latency_ms", label: "Latency", color: "#fbbf24" }] })} /></div>}
         </div>
       </Panel>
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..services.clients import from_lease
 from ..syslog_parser import parse_syslog
 from .base import CollectorError, FieldSpec, Gateway, Interface, LogLine, Section, Snapshot, norm_mac
 from .http_base import TLS_FIELDS, HttpCollector, NotFound, first_number, pick
@@ -112,6 +113,11 @@ class PfSenseCollector(HttpCollector):
         leases = await self.api("status/dhcp_server/leases", optional=True) or []
         if leases:
             snap.metrics["clients"] = sum(1 for le in leases if str(pick(le, "active_status", default="")) == "active") or len(leases)
+            snap.clients = [from_lease(str(pick(le, "mac", default="")), str(pick(le, "ip", default="")),
+                                       str(pick(le, "hostname", default="")),
+                                       str(pick(le, "online_status", "active_status", default="")),
+                                       str(pick(le, "if", "interface", default="")), pick(le, "ends", "end"))
+                            for le in leases if pick(le, "mac")]
             snap.sections.append(Section(
                 id="dhcp", title="DHCP leases", columns=["IP", "MAC", "Hostname", "Interface", "State"],
                 rows=[[pick(le, "ip"), pick(le, "mac"), pick(le, "hostname", default=""),

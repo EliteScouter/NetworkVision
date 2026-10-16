@@ -107,6 +107,10 @@ class Snapshot:
     logs: list[LogLine] = field(default_factory=list)
     sections: list[Section] = field(default_factory=list)
     children: list[ChildSnapshot] = field(default_factory=list)
+    #: Network clients seen by this integration (see services/clients.py for the field set).
+    clients: list[dict[str, Any]] = field(default_factory=list)
+    #: Wireless overview from a controller: {"aps": [...], "ssids": [...], "neighbors": [...]}.
+    wifi: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
