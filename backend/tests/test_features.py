@@ -190,3 +190,39 @@ async def test_migrate_db_tool_copies_and_refuses_overwrite(db, tmp_path):
     dst = tmp_path / "copy.db"
     assert migrate(["--source", f"sqlite:///{src}", "--target", f"sqlite:///{dst}"]) == 0
     assert migrate(["--source", f"sqlite:///{src}", "--target", f"sqlite:///{dst}"]) == 2  # target not empty
+
+
+def test_topology_matches_real_homelab_layout():
+    """VLAN interface names aren't cables; MAC learning links pfSense; only public-gateway firewalls face the internet."""
+    from app.collectors.base import Gateway, Interface, Snapshot
+    from app.services import topology
+    from app.services.clients import from_unifi
+    from app.services.state import DeviceState, store
+
+    store.devices.clear()
+    pf = DeviceState(id=1, name="PFSense", kind="pfsense", role="firewall", host="10.10.20.1")
+    pf.apply(Snapshot(interfaces=[Interface("INTERNET", alias="ix1.2", mac="aa:aa:aa:00:00:02", extra={"gateway": "50.53.0.1"}),
+                                  Interface("INFRASTRUCTURE", alias="ix0.20", mac="aa:aa:aa:00:00:01")],
+                      gateways=[Gateway("INTERNET_DHCP", "50.53.0.1", True)]))
+    opn = DeviceState(id=2, name="OPN-Sense", kind="opnsense", role="firewall", host="10.0.200.254")
+    opn.apply(Snapshot(interfaces=[Interface("WAN", alias="vtnet0")], gateways=[Gateway("WAN_DHCP", "~", True)]))
+    pc = DeviceState(id=3, name="HP-ProCurve-NET", kind="snmp", role="switch", host="10.10.20.4")
+    pc.apply(Snapshot(interfaces=[Interface("VLAN200", alias="OPNSENSE", media="virtual"), Interface("B2", media="copper")]))
+    xg = DeviceState(id=4, name="US XG 16", kind="unifi", role="switch", host="10.10.20.3", parent_id=9)
+    xg.facts["mac"] = "78:8a:20:f9:1e:93"
+    ctl = DeviceState(id=9, name="EliteUNIFI", kind="unifi", role="controller", host="10.10.20.2")
+    ctl.clients = [from_unifi({"mac": "aa:aa:aa:00:00:01", "is_wired": True, "sw_mac": "78:8a:20:f9:1e:93", "sw_port": 9}, True, {})]
+    store.devices.update({1: pf, 2: opn, 3: pc, 4: xg, 9: ctl})
+    try:
+        t = topology.build([], {})
+        pairs = {(e["source"], e["target"], e["kind"]): e for e in t["edges"]}
+        names = {n["id"]: n["name"] for n in t["nodes"]}
+        flat = {tuple(sorted((names[e["source"]], names[e["target"]]))): e for e in t["edges"]}
+        assert ("HP-ProCurve-NET", "OPN-Sense") not in flat  # VLAN200 "OPNSENSE" is not a cable
+        learned = flat[("PFSense", "US XG 16")]
+        assert learned["kind"] == "learned" and "Port 9" in (learned["source_port"], learned["target_port"])
+        assert ("Internet", "PFSense") in flat and ("Internet", "OPN-Sense") not in flat
+        assert topology.internet_edge_ids(list(store.devices.values())) == {1}
+        assert pairs  # built something
+    finally:
+        store.devices.clear()

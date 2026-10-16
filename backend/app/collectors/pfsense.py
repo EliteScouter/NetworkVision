@@ -11,6 +11,7 @@ pfSense's remote syslog at NetworkVision instead - you still get most data.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from ..services.clients import from_lease
@@ -54,6 +55,22 @@ class PfSenseCollector(HttpCollector):
             return body["data"]
         return body
 
+    def __init__(self, host: str, config: dict[str, Any], secrets: dict[str, Any]) -> None:
+        super().__init__(host, config, secrets)
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    async def cached(self, path: str, ttl: float, **params: Any) -> Any:
+        """Slow-changing data (rules, leases, services...) is refreshed on its own schedule so
+        the poll itself stays light - that is what makes a 5 s WAN sampling interval affordable."""
+        key = path + repr(sorted(params.items()))
+        hit = self._cache.get(key)
+        if hit and time.monotonic() - hit[0] < ttl:
+            return hit[1]
+        data = await self.api(path, optional=True, **params)
+        if data is not None:
+            self._cache[key] = (time.monotonic(), data)
+        return data if data is not None else (hit[1] if hit else None)
+
     async def collect(self) -> Snapshot:
         snap = Snapshot()
         try:
@@ -71,7 +88,7 @@ class PfSenseCollector(HttpCollector):
         load = pick(system, "cpu_load_avg")
         if isinstance(load, list) and load:
             snap.metrics["load1"] = first_number(load[0])
-        version = await self.api("system/version", optional=True) or {}
+        version = await self.cached("system/version", 600) or {}
         snap.facts = {
             "vendor": "Netgate",
             "model": pick(system, "system_platform", default="pfSense"),
@@ -110,7 +127,7 @@ class PfSenseCollector(HttpCollector):
                 detail=str(pick(gw, "substatus", default="")),
             ))
 
-        leases = await self.api("status/dhcp_server/leases", optional=True) or []
+        leases = await self.cached("status/dhcp_server/leases", 60) or []
         if leases:
             snap.metrics["clients"] = sum(1 for le in leases if str(pick(le, "active_status", default="")) == "active") or len(leases)
             snap.clients = [from_lease(str(pick(le, "mac", default="")), str(pick(le, "ip", default="")),
@@ -124,14 +141,14 @@ class PfSenseCollector(HttpCollector):
                        pick(le, "if", "interface", default=""), pick(le, "online_status", "active_status", default="")]
                       for le in leases[:500]],
             ))
-        services = await self.api("status/services", optional=True) or []
+        services = await self.cached("status/services", 120) or []
         if services:
             snap.sections.append(Section(
                 id="services", title="Services", columns=["Service", "Description", "Running"],
                 rows=[[pick(s, "name"), pick(s, "description", default=""), bool(pick(s, "status", default=False))]
                       for s in services],
             ))
-        rules = await self.api("firewall/rules", optional=True) or []
+        rules = await self.cached("firewall/rules", 300) or []
         if rules:
             snap.sections.append(Section(
                 id="rules", title="Firewall rules",
@@ -146,7 +163,7 @@ class PfSenseCollector(HttpCollector):
 
         limit = int(self.opt("log_lines") or 50)
         for kind in ("system", "firewall"):
-            for entry in (await self.api(f"status/logs/{kind}", optional=True, limit=limit) or [])[-limit:]:
+            for entry in (await self.cached(f"status/logs/{kind}", 30, limit=limit) or [])[-limit:]:
                 line = entry.get("text", "") if isinstance(entry, dict) else str(entry)
                 if line:
                     snap.logs.append(_parse_line(line, kind))

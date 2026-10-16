@@ -9,6 +9,7 @@ Links come from (strongest first):
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Any
 
@@ -64,7 +65,7 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
             return
         key = tuple(sorted([str(a), str(b)]))
         existing = edges.get(key)
-        rank = {"manual": 4, "lldp": 3, "uplink": 3, "description": 2, "wan": 1}
+        rank = {"manual": 4, "lldp": 3, "uplink": 3, "learned": 3, "description": 2, "wan": 1}
         if existing and rank.get(existing["kind"], 0) > rank.get(kind, 0):
             # keep stronger source but fill in missing ports
             if str(a) == existing["source"]:
@@ -88,18 +89,33 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
             if other is not None:
                 add(d.id, n.local_port, other, n.remote_port, n.protocol if n.protocol in ("lldp", "uplink") else "lldp")
         for i in d.interfaces.values():
-            if i.alias and len(_key(i.alias)) >= 3:
+            # Only real ports are cables: a VLAN interface called "OPNSENSE" is not a link to OPNsense.
+            if i.alias and len(_key(i.alias)) >= 3 and _is_physical(i):
                 ak = _key(i.alias)
                 target = by_name.get(ak) or next((v for k, v in by_name.items() if len(k) >= 4 and ak.startswith(k)), None)
                 if target is not None and target != d.id:
                     add(d.id, i.name, target, "", "description")
 
+    # Switch port learning: a controller (UniFi) knows which switch port every wired MAC sits on.
+    # Any monitored device whose MAC or IP appears there is cabled to that port - this links
+    # firewalls and servers that don't speak LLDP (pfSense, Proxmox, NAS...).
+    from .clients import tracker  # local import: clients -> state, never back to topology
+
+    for c in tracker.merged():
+        if not c.get("wired") or not c.get("uplink_mac"):
+            continue
+        switch = by_mac.get(norm_mac(c["uplink_mac"]))
+        dev = by_mac.get(c["mac"]) or (by_ip.get(c["ip"]) if c.get("ip") else None)
+        if switch is not None and dev is not None and switch != dev:
+            add(switch, f"Port {c['sw_port']}" if c.get("sw_port") else "", dev, "", "learned")
+
     for link in manual_links:
         add(link.a_device_id, link.a_port, link.b_device_id, link.b_port, "manual", link.label, link.id)
 
     has_internet = False
+    edge_ids = internet_edge_ids(devices)
     for d in devices:
-        if d.role in ("firewall", "router") and d.parent_id is None and d.gateways:
+        if d.id in edge_ids:
             wans = d.wan_interfaces()
             wan = max(wans, key=lambda i: (i.rx_bps or 0) + (i.tx_bps or 0), default=None)
             if wan is None:
@@ -137,6 +153,32 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
                       "up" if any(g.up is not False for g in gws) else "down", "health": "ok",
                       "metrics": {"latency_ms": min(lat) if lat else None}, "x": None, "y": None})
     return {"nodes": nodes, "edges": list(edges.values())}
+
+
+_VIRTUAL_NAME = re.compile(r"^(vlan|default_vlan|lo|loopback|oobm|br|bridge|bond|lag|po|tun|wg|ovpn|enc|pflog|pfsync)\d*", re.I)
+
+
+def _is_physical(i: IfState) -> bool:
+    return i.media not in ("virtual", "tunnel", "lag", "loopback") and not _VIRTUAL_NAME.match(i.name)
+
+
+def _is_public(addr: str) -> bool:
+    try:
+        return ipaddress.ip_address(addr.strip().split("%")[0]).is_global
+    except ValueError:
+        return False
+
+
+def internet_edge_ids(devices: list[DeviceState]) -> set[int]:
+    """Firewalls/routers that face the internet.
+
+    A firewall whose gateway is a public IP is an internet edge. If any such firewall
+    exists, firewalls with only private/unknown gateways (lab VMs, inner firewalls behind
+    the main one) are not. If none can be told apart, every firewall with a gateway counts.
+    """
+    cands = [d for d in devices if d.role in ("firewall", "router") and d.parent_id is None and d.gateways]
+    public = {d.id for d in cands if any(_is_public(g.address or "") for g in d.gateways)}
+    return public or {d.id for d in cands}
 
 
 def _is_edge_fw(edge: dict[str, Any], dev_id: int, wan_names: set[str]) -> bool:

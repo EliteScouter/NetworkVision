@@ -29,7 +29,9 @@ async def overview() -> dict[str, Any]:
     alerts = list(engine.open.values())
     sev = {k: sum(1 for a in alerts if a.severity == k) for k in ("critical", "warning", "info")}
 
-    edge = [d for d in devs if d.role in ("firewall", "router") and d.parent_id is None]
+    # Only internet-facing firewalls count toward WAN totals (a lab firewall behind the main one would double count).
+    edge_ids = topology.internet_edge_ids(devs)
+    edge = [d for d in devs if d.id in edge_ids]
     wan_rx = wan_tx = 0.0
     gws = []
     wan_history: list = []
@@ -44,8 +46,11 @@ async def overview() -> dict[str, Any]:
             if len(i.history) >= 2 and volume > busiest:
                 busiest, wan_history = volume, [list(p) for p in i.history]
                 wan_primary = {"device_id": d.id, "device": d.name, "ifname": i.name}
+    # Gateways are listed for every firewall/router (internet edge first), not just the edges.
+    for d in sorted((d for d in devs if d.role in ("firewall", "router") and d.parent_id is None),
+                    key=lambda d: d.id not in edge_ids):
         gws += [{"device": d.name, "device_id": d.id, "name": g.name, "up": g.up, "latency_ms": g.latency_ms, "loss_pct": g.loss_pct,
-                 "address": g.address} for g in d.gateways]
+                 "address": g.address, "edge": d.id in edge_ids} for g in d.gateways]
     controllers = [d for d in devs if d.role == "controller"]
     clients = sum(int(d.metrics.get("clients") or 0) for d in controllers) or \
         max((int(d.metrics.get("clients") or 0) for d in edge), default=0)

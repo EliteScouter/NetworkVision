@@ -71,3 +71,22 @@ async def test_opnsense_handles_both_api_naming_styles(style):
     await c.collect()
     wrong = "systemResources" if style == "snake" else "system_resources"
     assert not any(wrong in p for p in seen)
+
+
+async def test_pfsense_caches_slow_endpoints():
+    from app.collectors.pfsense import PfSenseCollector
+
+    hits: dict[str, int] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path.removeprefix("/api/v2/")
+        hits[path] = hits.get(path, 0) + 1
+        data = {"status/system": {"cpu_usage": 5}, "status/interfaces": [{"descr": "WAN", "status": "up", "inbytes": 1}]}
+        return httpx.Response(200, json={"data": data.get(path, [])})
+
+    c = PfSenseCollector("192.0.2.1", {"scheme": "https", "port": 443}, {"api_key": "k"})
+    c._client = httpx.AsyncClient(base_url=c.base_url, transport=httpx.MockTransport(handler))
+    for _ in range(3):
+        await c.collect()
+    assert hits["status/system"] == 3 and hits["status/interfaces"] == 3  # fresh every poll
+    assert hits["firewall/rules"] == 1 and hits["status/dhcp_server/leases"] == 1  # cached
