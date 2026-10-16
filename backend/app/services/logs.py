@@ -62,6 +62,7 @@ class LogPipeline:
     async def run(self) -> None:
         from .alerts import engine  # local imports: avoid cycles
         from .dhcp import dhcp
+        from .firewall import firewall
         from .security import security
 
         self.queue = asyncio.Queue(maxsize=50_000)  # bind to the running loop (not the import-time one)
@@ -78,9 +79,12 @@ class LogPipeline:
                 except TimeoutError:
                     break
             self.rate.append((time.time(), len(batch)))
-            async def _write(db, rows=batch):
-                await db.execute(insert(LogEntry), rows)
-                await db.commit()
+            keep = firewall.ingest(batch)  # filterlog -> firewall_events (optionally not duplicated in logs)
+
+            async def _write(db, rows=keep):
+                if rows:
+                    await db.execute(insert(LogEntry), rows)
+                    await db.commit()
 
             try:
                 await with_retry(_write)

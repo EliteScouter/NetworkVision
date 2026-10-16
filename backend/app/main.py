@@ -15,6 +15,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__
 from .api import auth, data, devices, insights, ws
+from .api import firewall as firewall_api
 from .api import history as history_api
 from .api import network as network_api
 from .api import speedtest as speedtest_api
@@ -25,6 +26,7 @@ from .security import auth_configured, require_user
 from .services import notifier, syslog
 from .services.bus import bus
 from .services.dhcp import dhcp
+from .services.firewall import firewall
 from .services.geoip import geoip
 from .services.keepass import keepass
 from .services.logs import pipeline
@@ -64,7 +66,8 @@ async def lifespan(_: FastAPI):
     await dhcp.load()
     log_task = asyncio.create_task(pipeline.run(), name="log-pipeline")
     side_tasks = [asyncio.create_task(security.run(), name="security"),
-                  asyncio.create_task(geoip.maintain(), name="geoip")]
+                  asyncio.create_task(geoip.maintain(), name="geoip"),
+                  asyncio.create_task(firewall.run(), name="firewall-writer")]
     handles = await syslog.start()
     await poller.start()
     await speedtest.load()
@@ -81,6 +84,8 @@ async def lifespan(_: FastAPI):
                 await task
         with contextlib.suppress(Exception):
             await security.flush()
+        with contextlib.suppress(Exception):
+            await firewall.flush(final=True)
         log_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await log_task
@@ -115,6 +120,7 @@ app.include_router(history_api.router)
 app.include_router(network_api.router)
 app.include_router(speedtest_api.router)
 app.include_router(insights.router)
+app.include_router(firewall_api.router)
 app.include_router(ws.router)
 
 

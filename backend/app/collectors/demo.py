@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import demo_firewall
 from . import demo_threats as threats
 from .base import ChildSnapshot, Collector, FieldSpec, Gateway, Interface, LogLine, Neighbor, Section, Snapshot
 
@@ -187,16 +188,11 @@ class DemoCollector(Collector):
             Gateway("WG_VPS", "10.66.0.1", True, round(34 + random.uniform(-3, 6), 1), 0.0),
         ]
         s.metrics["clients"] = 87 + int(10 * wave(3000))
-        s.logs = gen_logs("pfsense", random.randint(1, 4)) + threats.pfsense_logs()
+        s.logs = gen_logs("pfsense", random.randint(1, 4)) + threats.pfsense_logs() + demo_firewall.pfsense_filterlog()
         s.clients = threats.pfsense_leases()
         s.sections = [
             threats.pfsense_dhcp_section(),
-            Section("rules", "Firewall rules", ["#", "Iface", "Action", "Proto", "Source", "Destination", "Description"], [
-                [0, "WAN", "block", "any", "any", "any", "Default deny"],
-                [1, "LAN", "pass", "any", "LAN net", "any", "Default allow LAN"],
-                [2, "IOT", "block", "any", "IOT net", "LAN net", "Isolate IoT"],
-                [3, "IOT", "pass", "tcp/udp", "IOT net", "any:53,443", "IoT internet only"],
-                [4, "WG0", "pass", "any", "WG net", "LAN net", "Road warriors"]]),
+            demo_firewall.rules_section(),
             Section("services", "Services", ["Service", "Description", "Running"], [
                 ["unbound", "DNS Resolver", True], ["dhcpd", "DHCP Server", True], ["ntpd", "NTP", True],
                 ["wireguard", "WireGuard", True], ["pfBlockerNG", "pfBlockerNG", not cycle(3600, 0.05)]]),

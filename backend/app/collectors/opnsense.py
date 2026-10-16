@@ -188,6 +188,12 @@ class OpnSenseCollector(HttpCollector):
                 id="services", title="Services", columns=["Service", "Description", "Running"],
                 rows=[[s.get("name"), s.get("description", ""), bool(int(s.get("running", 0) or 0))] for s in srows],
             ))
+        rule_ids = await self.api("diagnostics/firewall/listRuleIds") or {}
+        items = rule_ids.get("items", []) if isinstance(rule_ids, dict) else rule_ids if isinstance(rule_ids, list) else []
+        labelled = [[str(r.get("id", "")), str(r.get("description", ""))] for r in items
+                    if isinstance(r, dict) and r.get("id") and r.get("description")]
+        if labelled:  # filterlog carries the rule label; the Firewall page resolves it with this table
+            snap.sections.append(Section(id="rules", title="Firewall rules", columns=["Label", "Description"], rows=labelled))
         fw = await self.api("core/firmware/status") or {}
         if isinstance(fw, dict) and fw:
             snap.facts["updates_available"] = bool(fw.get("updates") not in (None, "0", 0, "")) or \
