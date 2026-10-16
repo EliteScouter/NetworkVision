@@ -8,7 +8,7 @@ import { BAND_COLOR, BandBadge, ClientIcon, SignalBars } from "../components/Cli
 import { useHistory } from "../components/HistoryExplorer";
 import { Badge, Empty, Meter, Panel, Segmented, Spinner, StatusDot } from "../components/ui";
 import { ago, duration } from "../lib/format";
-import { useApi } from "../lib/hooks";
+import { useApi, useSize } from "../lib/hooks";
 import type { AccessPoint, Neighbor, Radio, WifiResponse } from "../lib/types";
 
 const BANDS = ["2.4", "5", "6"] as const;
@@ -82,7 +82,9 @@ function RadioCard({ ap, r }: { ap: AccessPoint; r: Radio }) {
 
 function ChannelMap({ band, aps, neighbors }: { band: Band; aps: AccessPoint[]; neighbors: Neighbor[] }) {
   const ax = AXIS[band];
-  const W = 1000, H = 260, padB = 26, padT = 12;
+  // Drawn at the panel's real pixel width: a fixed viewBox stretched to fit distorted text and curves.
+  const [ref, { width }] = useSize<HTMLDivElement>();
+  const W = Math.max(320, width), H = 260, padB = 26, padT = 12;
   const x = (f: number) => ((f - ax.min) / (ax.max - ax.min)) * W;
   const y = (sig: number) => padT + (H - padB - padT) * (1 - Math.max(0, Math.min(1, (sig + 95) / 65)));
   const shape = (ch: number, width: number, sig: number) => {
@@ -95,7 +97,8 @@ function ChannelMap({ band, aps, neighbors }: { band: Band; aps: AccessPoint[]; 
   const own = aps.flatMap((ap) => ap.radios.filter((r) => r.band === band && r.channel != null).map((r) => ({ ap, r })));
   const nb = neighbors.filter((n) => n.band === band && n.channel != null && n.signal != null);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-[260px] w-full" preserveAspectRatio="none">
+    <div ref={ref} className="w-full">
+    {width > 0 && <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
       {[-90, -80, -70, -60, -50, -40].map((s) => (
         <g key={s}><line x1={0} x2={W} y1={y(s)} y2={y(s)} stroke="#16233d" strokeDasharray="2 6" />
           <text x={4} y={y(s) - 3} fontSize={10} fill="#4a5878" className="num">{s} dBm</text></g>
@@ -120,7 +123,8 @@ function ChannelMap({ band, aps, neighbors }: { band: Band; aps: AccessPoint[]; 
       {ax.ticks.map((ch) => (
         <text key={ch} x={x(FREQ(band, ch))} y={H - 8} textAnchor="middle" fontSize={11} fill="#7f8fb0" className="num">{ch}</text>
       ))}
-    </svg>
+    </svg>}
+    </div>
   );
 }
 

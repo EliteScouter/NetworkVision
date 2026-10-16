@@ -11,7 +11,7 @@ import logging
 import time
 
 from ..config import get_settings
-from ..syslog_parser import parse_syslog
+from ..syslog_parser import parse_syslog, skew
 from .logs import pipeline
 
 log = logging.getLogger("networkvision.syslog")
@@ -22,9 +22,16 @@ def _ingest(raw: bytes, addr: str) -> None:
     for line in text.splitlines() or [text]:
         if not line.strip():
             continue
-        p = parse_syslog(line, fallback_host=addr, received=time.time())
+        received = time.time()
+        p = parse_syslog(line, fallback_host=addr, received=received)
+        device_id = pipeline.device_for(addr, p.host)
+        ts = p.ts
+        if p.naive:  # local time without a zone: learn this sender's offset and correct it
+            key = device_id if device_id is not None else addr
+            skew.observe(key, p.ts, received)
+            ts = p.ts + skew.offset(key)
         pipeline.submit({
-            "ts": p.ts, "device_id": pipeline.device_for(addr, p.host), "host": p.host or addr,
+            "ts": ts, "device_id": device_id, "host": p.host or addr,
             "severity": p.severity, "facility": p.facility, "app": p.app, "message": p.message, "source": "syslog",
         })
 

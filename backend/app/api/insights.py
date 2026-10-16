@@ -179,6 +179,36 @@ class KnownIn(BaseModel):
     label: str | None = Field(default=None, max_length=128)
 
 
+@router.get("/security/events")
+async def security_events(
+    category: list[str] = Query(default=list(CATS)), range_: str = Query("24h", alias="range"),
+    service: str | None = None, src: str | None = None, port: int | None = None,
+    before: float | None = None, limit: int = Query(200, ge=1, le=1000), db: AsyncSession = Depends(get_session),
+) -> dict:
+    """The individual (per-minute aggregated) events behind every number on the Security page."""
+    bad = [c for c in category if c not in CATS]
+    if bad:
+        raise HTTPException(422, f"Unknown category: {', '.join(bad)}")
+    await security.flush()
+    since = time.time() - RANGES.get(range_, 86400)
+    conds = [SecurityEvent.ts >= since, SecurityEvent.category.in_(category)]
+    if service:
+        conds.append(SecurityEvent.service == service)
+    if src:
+        conds.append(SecurityEvent.src_ip == src)
+    if port is not None:
+        conds.append(SecurityEvent.dst_port == port)
+    if before is not None:
+        conds.append(SecurityEvent.ts < before)
+    rows = (await db.execute(select(SecurityEvent).where(*conds)
+                             .order_by(SecurityEvent.ts.desc(), SecurityEvent.id.desc()).limit(limit))).scalars().all()
+    return {"items": [{"id": r.id, "ts": r.ts, "category": r.category, "src": r.src_ip, "dst": r.dst_ip, "dport": r.dst_port,
+                       "proto": r.proto, "service": r.service, "user": r.username, "detail": r.detail, "severity": r.severity,
+                       "count": r.count, "device_id": r.device_id, "device": _device_name(r.device_id),
+                       "country": country(r.src_ip), "internal": is_internal(r.src_ip)} for r in rows],
+            "more": len(rows) == limit}
+
+
 @router.get("/dhcp")
 async def dhcp_overview() -> dict:
     clients = dhcp.clients()

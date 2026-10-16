@@ -195,4 +195,4 @@ def _parse_line(line: str, kind: str) -> LogLine:
     if kind == "firewall":
         # filterlog CSV: ...,match,block|pass,in|out,...
         sev = 5 if ",block," in p.message else 7
-    return LogLine(ts=p.ts, message=p.message, app=p.app or kind, severity=sev, facility=kind)
+    return LogLine(ts=p.ts, message=p.message, app=p.app or kind, severity=sev, facility=kind, naive=p.naive)

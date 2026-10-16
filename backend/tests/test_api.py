@@ -179,3 +179,15 @@ def test_services_endpoints(client):
     assert client.delete(f"/api/services/{sid}").status_code == 204
     assert client.get(f"/api/services/{sid}").status_code == 404
     assert client.put("/api/services/99999", json=body).status_code == 404
+
+
+def test_security_events_drilldown(client):
+    client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"})
+    time.sleep(1.5)
+    r = client.get("/api/security/events", params={"category": ["block"], "range": "1h", "limit": 5})
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert items and all(i["category"] == "block" for i in items)
+    one = client.get("/api/security/events", params={"category": ["block"], "src": items[0]["src"], "range": "1h"}).json()["items"]
+    assert one and all(i["src"] == items[0]["src"] for i in one)
+    assert client.get("/api/security/events", params={"category": ["nope"]}).status_code == 422

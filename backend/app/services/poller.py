@@ -37,6 +37,7 @@ from ..models import (
     ServiceIncident,
 )
 from ..security import SecretError, decrypt_secrets, resolve_secret
+from ..syslog_parser import skew
 from . import history
 from .alerts import engine
 from .bus import bus
@@ -293,6 +294,10 @@ class Poller:
         wm = self.log_watermark[device_id]
         dev = self.devices.get(device_id)
         newest = wm
+        offset = skew.offset(device_id)  # learned from this device's live syslog
+        for line in snap.logs:
+            if line.naive and offset:
+                line.ts += offset
         for line in sorted(snap.logs, key=lambda x: x.ts):
             if line.ts < wm or pipeline.is_duplicate(device_id, line.ts, line.message):
                 continue

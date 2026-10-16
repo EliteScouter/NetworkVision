@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -37,6 +38,8 @@ class ParsedSyslog:
     facility: str
     app: str
     message: str
+    #: True when the device sent a timestamp without a timezone (RFC 3164 / ISO without offset).
+    naive: bool = False
 
 
 def _parse_iso(s: str) -> float | None:
@@ -83,6 +86,7 @@ def parse_syslog(raw: str, fallback_host: str = "", received: float | None = Non
         line = line[m.end():]
 
     ts: float | None = None
+    naive = False
     host, app, msg = fallback_host, "", line
 
     m5 = _RFC5424.match(line)
@@ -97,8 +101,10 @@ def parse_syslog(raw: str, fallback_host: str = "", received: float | None = Non
         mb = None if mi else _BSD_TS.match(line)
         if mi:
             ts, rest = _parse_iso(mi["ts"]), mi["rest"]
+            naive = not re.search(r"(Z|[+-]\d{2}:?\d{2})$", mi["ts"])
         elif mb:
             ts, rest = _parse_bsd(mb["ts"]), mb["rest"]
+            naive = True
         msg = rest
         had_ts = bool(mi or mb)
         mh = _HOST_APP.match(rest) if had_ts else None
@@ -115,6 +121,40 @@ def parse_syslog(raw: str, fallback_host: str = "", received: float | None = Non
     if severity is None:
         severity = guess_severity(msg)
     if ts is None or abs(ts - received) > 86400 * 2:
-        ts = received  # device clocks lie; never trust a wildly wrong timestamp
+        ts, naive = received, False  # device clocks lie; never trust a wildly wrong timestamp
     return ParsedSyslog(ts=ts, host=host or fallback_host, severity=severity, facility=facility,
-                        app=app[:64], message=msg.strip()[:8000])
+                        app=app[:64], message=msg.strip()[:8000], naive=naive)
+
+
+class ClockSkew:
+    """Learns each sender's timezone offset from timezone-less timestamps.
+
+    Classic syslog (pfSense's default) stamps local time with no zone, so a firewall in
+    UTC-7 would land 7 hours in the past in a UTC container. Live syslog arrives within
+    milliseconds, so (arrival - stamped) is the sender's offset; rounded to 15-minute steps
+    (covers every real timezone) and voted over recent lines so one late packet can't flip it.
+    """
+
+    STEP = 900
+    MAX = 14 * 3600 + 900
+
+    def __init__(self) -> None:
+        self._votes: dict[object, deque[int]] = {}
+        self._offset: dict[object, int] = {}
+
+    def observe(self, key: object, stamped: float, received: float) -> None:
+        delta = received - stamped
+        if abs(delta) > self.MAX:
+            return
+        votes = self._votes.setdefault(key, deque(maxlen=25))
+        votes.append(int(round(delta / self.STEP)) * self.STEP)
+        self._offset[key] = Counter(votes).most_common(1)[0][0]
+
+    def offset(self, key: object) -> int:
+        return self._offset.get(key, 0)
+
+    def snapshot(self) -> dict[str, int]:
+        return {str(k): v for k, v in self._offset.items() if v}
+
+
+skew = ClockSkew()

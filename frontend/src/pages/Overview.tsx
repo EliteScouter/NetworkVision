@@ -302,8 +302,8 @@ export default function OverviewPage() {
         <div className="h-56 overflow-hidden font-mono text-[12px] leading-6 [mask-image:linear-gradient(to_bottom,black_70%,transparent)]">
           {logs.length === 0 && <div className="py-8 text-center text-faint">Listening for syslog and device events…</div>}
           <AnimatePresence initial={false}>
-            {logs.slice(0, 18).map((l, i) => (
-              <motion.div key={`${l.ts}-${i}-${l.message.slice(0, 20)}`} layout initial={{ opacity: 0, x: -12, backgroundColor: "rgba(34,211,238,0.12)" }}
+            {logs.slice(0, 18).map((l) => (
+              <motion.div key={l._k ?? `${l.ts}-${l.host}-${l.message.slice(0, 40)}`} layout initial={{ opacity: 0, x: -12, backgroundColor: "rgba(34,211,238,0.12)" }}
                 animate={{ opacity: 1, x: 0, backgroundColor: "rgba(34,211,238,0)" }} transition={{ duration: 0.6 }}
                 className="flex gap-3 truncate rounded px-1">
                 <span className="shrink-0 text-faint">{clock(l.ts)}</span>

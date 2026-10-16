@@ -134,3 +134,27 @@ def test_no_single_precision_columns_on_mysql():
     for table in Base.metadata.sorted_tables:
         ddl = str(CreateTable(table).compile(dialect=mysql.dialect()))
         assert " FLOAT" not in ddl.upper(), f"{table.name} has a single-precision FLOAT column"
+
+
+def test_syslog_timezone_skew_is_learned_and_corrected(monkeypatch):
+    """pfSense's default RFC 3164 stamps local time with no zone (e.g. UTC-7 vs a UTC container)."""
+    import app.services.syslog as sl
+    from app.syslog_parser import ClockSkew
+
+    monkeypatch.setattr(sl, "skew", ClockSkew())
+    got: list[dict] = []
+    monkeypatch.setattr(sl.pipeline, "submit", got.append)
+    monkeypatch.setattr(sl.pipeline, "device_for", lambda *a: 1)
+    behind = 7 * 3600
+    for _ in range(3):
+        stamp = time.strftime("%b %d %H:%M:%S", time.localtime(time.time() - behind))
+        sl._ingest(f"<134>{stamp} pfsense filterlog[123]: 5,,,1000,ix1.2,match,block,in,4".encode(), "10.10.20.1")
+    assert sl.skew.offset(1) == behind
+    assert all(abs(e["ts"] - time.time()) < 5 for e in got)  # corrected to "now", not 7 h ago
+    # One odd late packet can't flip the learned offset.
+    sl.skew.observe(1, time.time() - 600, time.time())
+    assert sl.skew.offset(1) == behind
+    # RFC 5424 timestamps carry their zone and are never shifted.
+    iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+    sl._ingest(f"<134>1 {iso} pfsense filterlog 123 - - 5,,,1000".encode(), "10.10.20.1")
+    assert abs(got[-1]["ts"] - time.time()) < 5

@@ -115,6 +115,8 @@ export interface Alert {
 
 export interface LogItem {
   id?: number;
+  /** Client-side stable key for streamed lines (they have no DB id yet). */
+  _k?: number;
   ts: number;
   device_id: number | null;
   device?: string | null;

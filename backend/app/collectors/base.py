@@ -82,6 +82,7 @@ class LogLine:
     severity: int = 6
     app: str = ""
     facility: str = ""
+    naive: bool = False  # timestamp had no timezone (corrected with the sender's learned offset)
 
 
 @dataclass

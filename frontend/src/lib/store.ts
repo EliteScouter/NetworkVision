@@ -34,6 +34,7 @@ interface LiveState {
 }
 
 const MAX_LOGS = 600;
+let logSeq = 0;
 let toastSeq = 1;
 
 export const useLive = create<LiveState>((set, get) => ({
@@ -67,7 +68,9 @@ export const useLive = create<LiveState>((set, get) => ({
   },
   addLogs: (items) => {
     if (get().logsPaused || !items.length) return;
-    const next = [...items].reverse().concat(get().logs);
+    // Give every streamed line a stable identity so lists don't remount rows on each update.
+    const stamped: LogItem[] = items.map((l) => ({ ...l, _k: ++logSeq }));
+    const next = stamped.reverse().concat(get().logs);
     set({ logs: next.length > MAX_LOGS ? next.slice(0, MAX_LOGS) : next });
   },
   setLogsPaused: (logsPaused) => set({ logsPaused }),
