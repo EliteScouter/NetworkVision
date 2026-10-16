@@ -249,3 +249,47 @@ GatewayMetricHourly = _hourly("gateway_metrics_hourly", {
 RadioMetricHourly = _hourly("radio_metrics_hourly", {
     "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE")),
     "radio": mapped_column(String(16))}, RADIO_VALUES)
+class SecurityEvent(Base):
+    """Per-minute aggregate of security events (never one row per packet)."""
+
+    __tablename__ = "security_events"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Float)  # start of the minute bucket
+    category: Mapped[str] = mapped_column(String(16))  # block | pass | auth_fail | auth_ok | ids
+    src_ip: Mapped[str] = mapped_column(String(64))
+    dst_ip: Mapped[str] = mapped_column(String(64), default="")
+    dst_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proto: Mapped[str] = mapped_column(String(12), default="")
+    iface: Mapped[str] = mapped_column(String(32), default="")
+    service: Mapped[str] = mapped_column(String(64), default="")
+    username: Mapped[str] = mapped_column(String(64), default="")
+    device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
+    severity: Mapped[int] = mapped_column(SmallInteger, default=0)  # IDS priority, 0 otherwise
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    detail: Mapped[str] = mapped_column(String(255), default="")
+
+    __table_args__ = (
+        Index("ix_sec_ts", "ts"),
+        Index("ix_sec_src_ts", "src_ip", "ts"),
+        Index("ix_sec_cat_ts", "category", "ts"),
+    )
+
+
+class DhcpClient(Base):
+    """A (MAC, IP) pair seen in DHCP leases or controller client lists."""
+
+    __tablename__ = "dhcp_clients"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mac: Mapped[str] = mapped_column(String(17), index=True)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    hostname: Mapped[str] = mapped_column(String(128), default="")
+    source: Mapped[str] = mapped_column(String(16), default="lease")  # lease | controller
+    source_device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
+    first_seen: Mapped[float] = mapped_column(Float, default=now)
+    last_seen: Mapped[float] = mapped_column(Float, default=now)
+    known: Mapped[bool] = mapped_column(Boolean, default=False)
+    label: Mapped[str] = mapped_column(String(128), default="")
+
+    __table_args__ = (Index("ix_dhcp_mac_ip", "mac", "ip"),)

@@ -23,6 +23,7 @@ from ..models import (
     Device,
     DeviceMetric,
     DeviceMetricHourly,
+    DhcpClient,
     GatewayMetric,
     GatewayMetricHourly,
     InterfaceMetric,
@@ -30,12 +31,14 @@ from ..models import (
     LogEntry,
     RadioMetric,
     RadioMetricHourly,
+    SecurityEvent,
 )
 from ..security import SecretError, decrypt_secrets, resolve_secret
 from . import history
 from .alerts import engine
 from .bus import bus
 from .clients import tracker as client_tracker
+from .dhcp import dhcp
 from .keepass import keepass
 from .logs import pipeline
 from .state import DeviceState, store
@@ -222,6 +225,11 @@ class Poller:
         if snap.children:
             await self._apply_children(dev, snap.children)
         await engine.process(st)
+        if snap.reachable:
+            try:
+                await dhcp.observe(dev.id, snap)
+            except Exception:  # noqa: BLE001 - insights must never break polling
+                log.exception("DHCP insights failed for %s", dev.name)
         self._dirty.set()
         return st
 
@@ -406,9 +414,13 @@ class Poller:
                     "logs": await delete_in_chunks(LogEntry, LogEntry.ts < now - s.retention_days_logs * 86400),
                     "alerts": await delete_in_chunks(Alert, Alert.resolved_at.is_not(None)
                                                      & (Alert.resolved_at < now - s.retention_days_alerts * 86400)),
+                    "security events": await delete_in_chunks(
+                        SecurityEvent, SecurityEvent.ts < now - s.retention_days_security * 86400),
+                    "dhcp clients": await delete_in_chunks(DhcpClient, DhcpClient.last_seen < now - 90 * 86400),
                 }
                 if any(removed.values()):
                     log.info("Retention cleanup removed %s", ", ".join(f"{n} {k}" for k, n in removed.items() if n))
+                dhcp.prune(now - 90 * 86400)
             except Exception:  # noqa: BLE001
                 log.exception("Retention cleanup failed")
             await asyncio.sleep(3600)

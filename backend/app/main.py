@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
 from . import __version__
-from .api import auth, data, devices, ws
+from .api import auth, data, devices, insights, ws
 from .api import history as history_api
 from .api import network as network_api
 from .api import speedtest as speedtest_api
@@ -24,10 +24,13 @@ from .db import dispose, init_db
 from .security import auth_configured, require_user
 from .services import notifier, syslog
 from .services.bus import bus
+from .services.dhcp import dhcp
+from .services.geoip import geoip
 from .services.keepass import keepass
 from .services.logs import pipeline
 from .services.mfa import mfa
 from .services.poller import poller
+from .services.security import security
 from .services.speedtest import speedtest
 
 
@@ -58,7 +61,10 @@ async def lifespan(_: FastAPI):
         from .demo_seed import seed_demo
 
         await seed_demo()
+    await dhcp.load()
     log_task = asyncio.create_task(pipeline.run(), name="log-pipeline")
+    side_tasks = [asyncio.create_task(security.run(), name="security"),
+                  asyncio.create_task(geoip.maintain(), name="geoip")]
     handles = await syslog.start()
     await poller.start()
     await speedtest.load()
@@ -69,10 +75,15 @@ async def lifespan(_: FastAPI):
         await poller.stop()
         for h in handles:
             h.close()
-        for task in (log_task, speed_task):
+        for task in (speed_task, *side_tasks):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        with contextlib.suppress(Exception):
+            await security.flush()
+        log_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await log_task
         await dispose()
 
 
@@ -103,6 +114,7 @@ app.include_router(data.router)
 app.include_router(history_api.router)
 app.include_router(network_api.router)
 app.include_router(speedtest_api.router)
+app.include_router(insights.router)
 app.include_router(ws.router)
 
 

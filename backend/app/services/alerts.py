@@ -32,6 +32,15 @@ class Condition:
     title: str
     detail: str = ""
     debounce: bool = True  # require N consecutive hits
+    device_id: int | None = None  # only used by sync_group()
+
+
+# Alerts whose keys start with these are owned by the log/security/DHCP engines, never by
+# the per-device evaluate() pass - process() must not resolve them.
+EXTERNAL_PREFIXES = ("log:", "sec:", "dhcp:")
+# ... and of those, these are stateless events that expire on their own.
+EVENT_PREFIXES = ("log:", "sec:", "dhcp:new:", "dhcp:rogue:", "dhcp:nak:")
+EVENT_TTL_ON_LOAD = 1800
 
 
 def alert_dict(a: Alert) -> dict[str, Any]:
@@ -117,6 +126,10 @@ class AlertEngine:
         async with sessionmaker()() as db:
             rows = (await db.execute(select(Alert).where(Alert.resolved_at.is_(None)))).scalars().all()
         self.open = {a.key: a for a in rows}
+        # Events restored after a restart still need to expire eventually.
+        for a in rows:
+            if a.key.startswith(EVENT_PREFIXES):
+                self._event_expiry[a.key] = a.last_seen_at + EVENT_TTL_ON_LOAD
         self._recount()
 
     def _recount(self) -> None:
@@ -136,7 +149,8 @@ class AlertEngine:
         # Rates need two samples: don't resolve alerts restored from the DB until the device is warmed up.
         self._evals[dev.id] = self._evals.get(dev.id, 0) + 1
         warm = self._evals[dev.id] > 2
-        prefix_keys = {k for k, a in self.open.items() if a.device_id == dev.id and k not in self._event_expiry} if warm else set()
+        prefix_keys = {k for k, a in self.open.items()
+                       if a.device_id == dev.id and not k.startswith(EXTERNAL_PREFIXES) and k not in self._event_expiry} if warm else set()
         now = time.time()
         opened: list[Alert] = []
         resolved: list[Alert] = []
@@ -181,8 +195,14 @@ class AlertEngine:
                 a = self.open[key]
                 a.count += 1
                 a.last_seen_at, a.detail = now, detail
+                escalated = RANK[severity] > RANK.get(a.severity, 0)
+                if escalated:
+                    a.severity, a.title = severity, title
                 await db.merge(a)
                 await db.commit()
+                if escalated:
+                    self._recount()
+                    bus.publish({"type": "alert", "event": "updated", "alert": alert_dict(a)})
                 return
             a = Alert(key=key, device_id=device_id, rule=rule, severity=severity, title=title, detail=detail,
                       started_at=now, last_seen_at=now)
@@ -191,6 +211,42 @@ class AlertEngine:
         self.open[key] = a
         self._recount()
         self._announce([a], [])
+
+    async def sync_group(self, prefixes: tuple[str, ...], conds: list[Condition]) -> None:
+        """Make the open alerts under `prefixes` match `conds` exactly (open new, resolve gone).
+
+        Used by engines that evaluate a whole population at once (e.g. DHCP conflicts).
+        """
+        now = time.time()
+        want = {c.key: c for c in conds}
+        opened: list[Alert] = []
+        resolved: list[Alert] = []
+        changed = False
+        async with sessionmaker()() as db:
+            for key, c in want.items():
+                a = self.open.get(key)
+                if a is None:
+                    a = Alert(key=key, device_id=c.device_id, rule=c.rule, severity=c.severity, title=c.title,
+                              detail=c.detail, started_at=now, last_seen_at=now)
+                    db.add(a)
+                    opened.append(a)
+                elif a.detail != c.detail or a.severity != c.severity or now - a.last_seen_at > 300:
+                    a.detail, a.severity, a.title, a.last_seen_at = c.detail, c.severity, c.title, now
+                    await db.merge(a)
+                    changed = True
+            for key, a in list(self.open.items()):
+                if key.startswith(prefixes) and key not in want and key not in self._event_expiry:
+                    self.open.pop(key)
+                    a.resolved_at = now
+                    await db.merge(a)
+                    resolved.append(a)
+            if opened or resolved or changed:
+                await db.commit()
+        for a in opened:
+            self.open[a.key] = a
+        if opened or resolved:
+            self._recount()
+            self._announce(opened, resolved)
 
     async def expire_events(self) -> None:
         now = time.time()
@@ -258,5 +314,7 @@ class AlertEngine:
             bus.publish({"type": "alert", "event": "resolved", "alert": d})
             notifier.fire(d, resolved=True)
 
+
+RANK = {"info": 0, "warning": 1, "critical": 2}
 
 engine = AlertEngine()

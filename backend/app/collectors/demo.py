@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import demo_threats as threats
 from .base import ChildSnapshot, Collector, FieldSpec, Gateway, Interface, LogLine, Neighbor, Section, Snapshot
 
 T0 = time.time()
@@ -105,7 +106,7 @@ LOG_TEMPLATES: dict[str, list[tuple[int, str, str]]] = {
 
 
 def fake_ip() -> str:
-    return f"{random.choice([45, 89, 103, 185, 194, 203])}.{random.randint(1, 254)}.{random.randint(1, 254)}.{random.randint(1, 254)}"
+    return threats.attacker()  # documentation ranges only - never a real host
 
 
 def gen_logs(kind: str, n: int, ports: int = 8) -> list[LogLine]:
@@ -186,8 +187,10 @@ class DemoCollector(Collector):
             Gateway("WG_VPS", "10.66.0.1", True, round(34 + random.uniform(-3, 6), 1), 0.0),
         ]
         s.metrics["clients"] = 87 + int(10 * wave(3000))
-        s.logs = gen_logs("pfsense", random.randint(1, 4))
+        s.logs = gen_logs("pfsense", random.randint(1, 4)) + threats.pfsense_logs()
+        s.clients = threats.pfsense_leases()
         s.sections = [
+            threats.pfsense_dhcp_section(),
             Section("rules", "Firewall rules", ["#", "Iface", "Action", "Proto", "Source", "Destination", "Description"], [
                 [0, "WAN", "block", "any", "any", "any", "Default deny"],
                 [1, "LAN", "pass", "any", "LAN net", "any", "Default allow LAN"],
@@ -205,7 +208,7 @@ class DemoCollector(Collector):
         s = self._base((92 + random.uniform(0, 6)) if hot else 6 + 10 * wave(300), 41 + 5 * wave(900))
         s.facts = {"vendor": "Deciso", "model": "OPNsense (Proxmox VM)", "version": "26.7.2", "updates_available": True}
         s.gateways = [Gateway("LAB_GW", "10.0.0.1", True, round(0.4 + random.uniform(0, 0.3), 2), 0.0)]
-        s.logs = gen_logs("opnsense", random.randint(0, 2))
+        s.logs = gen_logs("opnsense", random.randint(0, 2)) + threats.opnsense_logs()
         if hot and random.random() < 0.3:
             s.logs.append(LogLine(time.time(), "suricata: CPU usage high, packet drops on vtnet1", 3, "suricata"))
         s.sections = [Section("firmware", "Firmware", kind="kv", rows=[
@@ -234,6 +237,8 @@ class DemoCollector(Collector):
         s.metrics["latency_ms"] = round(random.uniform(0.2, 0.9), 2)
         s.metrics["loss_pct"] = 0.0
         s.facts = {"vendor": "", "model": self.config.get("demo_model", "Server")}
+        if self.name == "Portainer":
+            s.logs = threats.portainer_logs()
         return s
 
     def _unifi(self) -> Snapshot:
@@ -294,4 +299,5 @@ class DemoCollector(Collector):
         s.sections = [Section("networks", "Networks / VLANs", ["Name", "Purpose", "VLAN", "Subnet", "DHCP", "Enabled"], [
             ["LAN", "corporate", "", "10.0.0.1/24", False, True], ["IoT", "corporate", 30, "10.0.30.1/24", False, True],
             ["Lab", "corporate", 50, "10.0.50.1/24", False, True], ["Guests", "guest", 70, "10.0.70.1/24", True, True]])]
+        s.logs += threats.unifi_logs()
         return s

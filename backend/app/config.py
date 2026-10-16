@@ -93,6 +93,30 @@ class Settings(BaseSettings):
     alert_if_errors_per_min: float = 50
     alert_consecutive: int = Field(default=3, ge=1)
 
+    # --- Security detections ----------------------------------------------------
+    sec_enabled: bool = True
+    sec_bruteforce_failures: int = Field(default=10, ge=1)  # auth failures from one source ...
+    sec_bruteforce_window_min: int = Field(default=10, ge=1)  # ... within this many minutes
+    sec_scan_ports: int = Field(default=15, ge=2)  # distinct destination ports from one source ...
+    sec_scan_hosts: int = Field(default=10, ge=2)  # ... or distinct destination hosts ...
+    sec_scan_window_min: int = Field(default=5, ge=1)  # ... within this many minutes
+    # Internet background scanning that is fully blocked is noise; only alert on scans that
+    # got something through, or that come from inside the network, unless this is true.
+    sec_scan_alert_blocked: bool = False
+    sec_wan_spike_factor: float = Field(default=4.0, ge=1.5)  # blocked/min vs. rolling baseline
+    sec_wan_spike_min: int = Field(default=300, ge=1)  # ... and at least this many per minute
+    sec_ignore_ips: str = ""  # comma separated IPs/CIDRs never treated as attackers
+    retention_days_security: int = Field(default=30, ge=1)
+
+    # --- GeoIP (optional, MaxMind GeoLite2 Country) --------------------------------
+    geoip_db: str = ""  # path to a .mmdb; defaults to <data_dir>/GeoLite2-Country.mmdb
+    geoip_license_key: str = ""  # if set and the db is missing/stale, download it automatically
+
+    # --- DHCP insights ------------------------------------------------------------
+    dhcp_enabled: bool = True
+    dhcp_mac_max_ips: int = Field(default=4, ge=2)  # distinct IPs for one MAC in 24h before flagging
+    dhcp_learning_hours: float = Field(default=1.0, ge=0)  # no "new device" alerts while learning
+
     # --- Notifications --------------------------------------------------------
     notify_min_severity: str = "warning"  # info | warning | critical
     notify_webhook_url: str = ""

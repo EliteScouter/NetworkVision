@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
-import type { Alert, DeviceSummary, LogItem, SpeedProgress } from "./types";
+import type { Alert, DeviceSummary, LogItem, SecEvent, SpeedProgress } from "./types";
 
 export interface Toast {
   id: number;
@@ -18,6 +18,7 @@ interface LiveState {
   alertsLoaded: boolean;
   logs: LogItem[];
   logsPaused: boolean;
+  security: SecEvent[];
   toasts: Toast[];
   speed: SpeedProgress | null;
   setSpeed: (p: SpeedProgress | null) => void;
@@ -27,6 +28,7 @@ interface LiveState {
   applyAlert: (event: string, a: Alert) => void;
   addLogs: (items: LogItem[]) => void;
   setLogsPaused: (p: boolean) => void;
+  addSecurity: (items: SecEvent[]) => void;
   pushToast: (t: Omit<Toast, "id">) => void;
   dismissToast: (id: number) => void;
 }
@@ -42,6 +44,7 @@ export const useLive = create<LiveState>((set, get) => ({
   alertsLoaded: false,
   logs: [],
   logsPaused: false,
+  security: [],
   toasts: [],
   speed: null,
   setSpeed: (speed) => set({ speed }),
@@ -68,6 +71,11 @@ export const useLive = create<LiveState>((set, get) => ({
     set({ logs: next.length > MAX_LOGS ? next.slice(0, MAX_LOGS) : next });
   },
   setLogsPaused: (logsPaused) => set({ logsPaused }),
+  addSecurity: (items) => {
+    if (!items.length) return;
+    const next = [...items].reverse().concat(get().security);
+    set({ security: next.length > 400 ? next.slice(0, 400) : next });
+  },
   pushToast: (t) => {
     const id = toastSeq++;
     set({ toasts: [...get().toasts.slice(-4), { ...t, id }] });
@@ -99,6 +107,7 @@ export function connectLive(): () => void {
       else if (msg.type === "alert") s.applyAlert(msg.event, msg.alert);
       else if (msg.type === "logs") s.addLogs(msg.items);
       else if (msg.type === "speedtest") s.setSpeed(msg);
+      else if (msg.type === "security") s.addSecurity(msg.items);
     };
     socket.onclose = () => {
       window.clearInterval(pingTimer);

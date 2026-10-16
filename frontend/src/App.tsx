@@ -9,10 +9,12 @@ import AlertsPage from "./pages/Alerts";
 import ClientsPage from "./pages/Clients";
 import DeviceDetailPage from "./pages/DeviceDetail";
 import DevicesPage from "./pages/Devices";
+import DhcpPage from "./pages/Dhcp";
 import IntegrationsPage from "./pages/Integrations";
 import LoginPage from "./pages/Login";
 import LogsPage from "./pages/Logs";
 import OverviewPage from "./pages/Overview";
+import SecurityPage from "./pages/Security";
 import SpeedtestPage from "./pages/Speedtest";
 import TopologyPage from "./pages/Topology";
 import WifiPage from "./pages/Wifi";
@@ -37,6 +39,8 @@ function Authed({ me }: { me: Me }) {
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/wifi" element={<WifiPage />} />
         <Route path="/speedtest" element={<SpeedtestPage />} />
+        <Route path="/security" element={<SecurityPage />} />
+        <Route path="/dhcp" element={<DhcpPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/integrations" element={<IntegrationsPage meta={meta} />} />
