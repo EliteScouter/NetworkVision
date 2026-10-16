@@ -183,6 +183,35 @@ documented list: auth, database, retention, alert thresholds and notifications.
 | `NV_DB_DRIVER` | `sqlite` | `sqlite` or `mariadb` |
 | `NV_DEMO_MODE` | `false` | Simulated homelab |
 
+### Settings in the UI
+
+Alert thresholds, rules, retention and notification channels can also be changed live under
+**Settings**, without a redeploy. Precedence, lowest to highest:
+
+1. built-in default
+2. `NV_*` environment variable
+3. value saved in the UI
+
+Each field shows where its value comes from (`default`, `env` or `custom`). **Reset** deletes the
+saved value so the env var (or the default) applies again. Values are stored in the `settings`
+table; webhook URLs and the ntfy token are encrypted with `NV_SECRET_KEY` and are never sent back
+to the browser. **Send test notification** posts to every configured channel and shows the
+result of each one.
+
+**Alert tuning** (on each device's page):
+
+- mute every alert for a device, or only individual ports (the bell on a port row), e.g. a port
+  that is expected to be down
+- turn individual rules off for that device (rules can also be turned off globally in Settings)
+- override thresholds for that device. An empty field means the global value applies.
+
+**Maintenance windows** (Settings › Maintenance) are one-off, daily or weekly, and apply to one
+device or to all of them. A device's window also covers the devices it manages, such as a UniFi
+controller's APs. During a window, alerts are still recorded but marked *maintenance*: they are
+not notified, don't change device health and don't pop up toasts. A banner shows while a window
+is active. If a problem is still there when the window ends, the alert becomes a normal alert
+and is notified then. Recurring windows use the browser's time zone and follow DST.
+
 ## Architecture
 
 ```

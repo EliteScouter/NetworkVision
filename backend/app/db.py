@@ -70,6 +70,7 @@ async def init_db() -> None:
 
     async with engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_add_missing_columns)
         if conn.dialect.name in ("mysql", "mariadb"):
             await conn.run_sync(_upgrade_single_precision)
     safe = engine().url.render_as_string(hide_password=True)
@@ -89,6 +90,27 @@ def _upgrade_single_precision(conn) -> None:
         null = "NULL" if table.c[column_name].nullable else "NOT NULL"
         log.warning("Upgrading %s.%s from FLOAT to DOUBLE (timestamp precision fix)", table_name, column_name)
         conn.execute(text(f"ALTER TABLE `{table_name}` MODIFY `{column_name}` DOUBLE {null}"))
+
+
+def _add_missing_columns(conn) -> None:
+    """create_all() never alters existing tables: add columns introduced by newer releases.
+
+    Only for nullable columns or ones with a server_default, so the ALTER is always safe.
+    """
+    from sqlalchemy import inspect
+    from sqlalchemy.schema import CreateColumn
+
+    insp = inspect(conn)
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name in have or not (col.nullable or col.server_default is not None):
+                continue
+            ddl = CreateColumn(col).compile(dialect=conn.dialect)
+            log.info("Schema upgrade: adding %s.%s", table.name, col.name)
+            conn.exec_driver_sql(f"ALTER TABLE {conn.dialect.identifier_preparer.quote(table.name)} ADD COLUMN {ddl}")
 
 
 # MariaDB/Galera errors that are safe to retry: deadlock / certification failure,

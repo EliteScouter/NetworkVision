@@ -24,6 +24,7 @@ from ..security import (
 from ..services import history
 from ..services.keepass import keepass
 from ..services.poller import poller, run_collect
+from ..services.runtime import runtime
 from ..services.state import store
 
 router = APIRouter(prefix="/api", tags=["devices"], dependencies=[Depends(require_user)])
@@ -201,6 +202,7 @@ async def delete_device(device_id: int, db: AsyncSession = Depends(get_session))
     await poller.remove(device_id)
     await db.delete(d)
     await db.commit()
+    runtime.drop_device(device_id)
 
 
 @router.put("/devices/{device_id}/position")

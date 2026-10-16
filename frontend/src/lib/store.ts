@@ -59,9 +59,9 @@ export const useLive = create<LiveState>((set, get) => ({
     if (event === "resolved") delete alerts[a.id];
     else alerts[a.id] = a;
     set({ alerts });
-    if (event === "opened" && a.severity !== "info") {
+    if (event === "opened" && a.severity !== "info" && !a.suppressed) {
       get().pushToast({ severity: a.severity, title: a.title, detail: a.detail, deviceId: a.device_id });
-    } else if (event === "resolved" && a.severity === "critical") {
+    } else if (event === "resolved" && a.severity === "critical" && !a.suppressed) {
       get().pushToast({ severity: "ok", title: `Resolved: ${a.title}`, deviceId: a.device_id });
     }
   },

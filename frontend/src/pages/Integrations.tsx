@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { AccountSecurity, type KeePassStatus } from "../components/AccountSecurity";
 import { DeviceIcon, ROLE_LABEL } from "../components/DeviceIcon";
 import { KeePassPicker } from "../components/KeePassPicker";
@@ -347,7 +347,10 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
             <div className="grid gap-x-8 sm:grid-cols-2">
               {Object.entries(meta.thresholds).map(([k, v]) => <Kv key={k} k={k.replace(/_/g, " ")} v={v} />)}
             </div>
-            <p className="mt-3 text-xs text-faint">Thresholds are set with <code>NV_ALERT_*</code> environment variables — see .env.example.</p>
+            <p className="mt-3 text-xs text-faint">
+              Defaults come from <code>NV_ALERT_*</code> environment variables; change them live in{" "}
+              <Link to="/settings" className="text-cyan">Settings</Link>.
+            </p>
           </Panel>
         </div>
       )}

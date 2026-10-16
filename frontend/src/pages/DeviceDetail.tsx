@@ -3,6 +3,8 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
+  Bell,
+  BellOff,
   Cable,
   Cpu,
   Globe,
@@ -23,6 +25,7 @@ import {
 import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
+import { AlertTuningPanel, useAlertTuning } from "../components/AlertTuning";
 import { AreaChart, type Series } from "../components/charts";
 import { DeviceIcon, ROLE_LABEL } from "../components/DeviceIcon";
 import { Badge, Drawer, Empty, Kv, Meter, Panel, Segmented, Spinner, StatusDot } from "../components/ui";
@@ -167,6 +170,7 @@ function IfaceDrawer({ deviceId, iface, onClose }: { deviceId: number; iface: If
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const { data: d, error, reload } = useApi<DeviceDetail>(`/devices/${id}`, 5000);
+  const { tuning, save: saveTuning, toggleInterface } = useAlertTuning(Number(id));
   const [range, setRange] = useState<Range>("live");
   const { data: hist } = useApi<{ columns: string[]; points: (number | null)[][] }>(range !== "live" ? `/devices/${id}/metrics` : null, 30000, { range });
   const { data: logData } = useApi<{ items: LogItem[] }>(`/logs`, 10000, { device_id: Number(id), limit: 80 });
@@ -301,7 +305,7 @@ export default function DeviceDetailPage() {
           <div className="mb-4"><Faceplate ifaces={d.interfaces} onPick={setIface} /></div>
           <div className="max-h-[520px] overflow-auto rounded-lg border border-edge">
             <table className="table-hud min-w-[860px]">
-              <thead><tr><th></th><th>Port</th><th>Description</th><th>Speed</th><th>Rx</th><th>Tx</th><th className="w-40">Util</th><th>Err/min</th><th>Flaps</th><th>PoE</th></tr></thead>
+              <thead><tr><th></th><th>Port</th><th>Description</th><th>Speed</th><th>Rx</th><th>Tx</th><th className="w-40">Util</th><th>Err/min</th><th>Flaps</th><th>PoE</th><th className="w-8"></th></tr></thead>
               <tbody>
                 {ifs.map((i) => (
                   <tr key={i.name} className="cursor-pointer" onClick={() => setIface(i)}>
@@ -315,6 +319,17 @@ export default function DeviceDetailPage() {
                     <td className={clsx("num text-xs", i.errors_per_min > 0 ? "text-crit" : "text-faint")}>{i.errors_per_min.toFixed(0)}</td>
                     <td className={clsx("num text-xs", i.flaps_10m >= 4 ? "text-warn" : "text-faint")}>{i.flaps_10m}</td>
                     <td className="num text-xs text-dim">{i.poe_w != null ? `${i.poe_w.toFixed(1)}W` : "—"}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      {(() => {
+                        const muted = !!tuning?.muted_interfaces.includes(i.name);
+                        return (
+                          <button className={clsx("btn btn-ghost !p-1", muted ? "text-warn" : "text-faint opacity-40 hover:opacity-100")}
+                            title={muted ? "Alerts muted for this port - click to unmute" : "Mute alerts for this port"} onClick={() => toggleInterface(i.name)}>
+                            {muted ? <BellOff size={13} /> : <Bell size={13} />}
+                          </button>
+                        );
+                      })()}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -374,13 +389,15 @@ export default function DeviceDetailPage() {
               {!alertHist?.items.length && <div className="py-4 text-center text-sm text-faint">No alerts recorded.</div>}
               {alertHist?.items.map((a) => (
                 <div key={a.id} className={clsx("rounded-lg border p-2.5", a.resolved_at ? "border-edge opacity-60" : a.severity === "critical" ? "border-crit/40" : "border-warn/30")}>
-                  <div className="flex items-center justify-between"><Badge tone={a.resolved_at ? "ok" : a.severity}>{a.resolved_at ? "resolved" : a.severity}</Badge><span className="font-mono text-[10.5px] text-faint">{ago(a.started_at)}</span></div>
+                  <div className="flex items-center justify-between"><span className="flex gap-1"><Badge tone={a.resolved_at ? "ok" : a.severity}>{a.resolved_at ? "resolved" : a.severity}</Badge>{a.suppressed && <Badge tone="violet">maintenance</Badge>}</span><span className="font-mono text-[10.5px] text-faint">{ago(a.started_at)}</span></div>
                   <div className="mt-1 text-sm">{a.title}</div>
                   {a.detail && <div className="text-xs text-dim">{a.detail}</div>}
                 </div>
               ))}
             </div>
           </Panel>
+
+          <AlertTuningPanel tuning={tuning} save={saveTuning} />
 
           {d.neighbors.length > 0 && (
             <Panel title="Neighbors" icon={<Network size={15} />}>

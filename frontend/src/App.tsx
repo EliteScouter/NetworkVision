@@ -16,6 +16,7 @@ import FirewallPage from "./pages/Firewall";
 import LogsPage from "./pages/Logs";
 import OverviewPage from "./pages/Overview";
 import SecurityPage from "./pages/Security";
+import SettingsPage from "./pages/Settings";
 import SpeedtestPage from "./pages/Speedtest";
 import TopologyPage from "./pages/Topology";
 import WifiPage from "./pages/Wifi";
@@ -46,6 +47,7 @@ function Authed({ me }: { me: Me }) {
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/integrations" element={<IntegrationsPage meta={meta} />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Shell>

@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Bell, BellOff, Check, CheckCheck, Search, ShieldCheck } from "lucide-react";
+import { Bell, BellOff, Check, CheckCheck, Search, ShieldCheck, SlidersHorizontal, Wrench } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -19,6 +19,7 @@ const RULE_LABEL: Record<string, string> = {
   sec_wan_spike: "WAN spike", dhcp_ip_conflict: "IP conflict", dhcp_duplicate_hostname: "Duplicate hostname",
   dhcp_address_hopping: "Address hopping", dhcp_multiple_servers: "Multiple DHCP servers", dhcp_rogue_server: "Rogue DHCP",
   dhcp_nak_storm: "DHCPNAK storm", dhcp_new_device: "New device",
+  speedtest_failed: "Speed test", speedtest_slow: "Slow internet",
 };
 
 export default function AlertsPage() {
@@ -42,7 +43,7 @@ export default function AlertsPage() {
   }, [tab, active, history, sev, q, hideAck]);
 
   const counts = { critical: 0, warning: 0, info: 0 } as Record<string, number>;
-  Object.values(active).forEach((a) => counts[a.severity]++);
+  Object.values(active).forEach((a) => !a.suppressed && counts[a.severity]++);
 
   const act = async (a: Alert, action: "ack" | "unack" | "resolve") => {
     const updated = await api<Alert>(`/alerts/${a.id}/${action}`, { method: "POST" });
@@ -78,6 +79,7 @@ export default function AlertsPage() {
             <button className="btn" onClick={ackAll} disabled={!list.some((a) => !a.acknowledged_at)}><CheckCheck size={15} /> Ack all shown</button>
           </>
         )}
+        <Link to="/settings" className="btn btn-ghost text-dim" title="Thresholds, rules, notifications and maintenance"><SlidersHorizontal size={15} /> Tune</Link>
       </div>
 
       <div className="space-y-2">
@@ -98,6 +100,7 @@ export default function AlertsPage() {
                   <Badge tone={a.severity}>{a.severity}</Badge>
                   <Badge>{RULE_LABEL[a.rule] ?? a.rule}</Badge>
                   {a.count > 1 && <Badge tone="violet">×{a.count}</Badge>}
+                  {a.suppressed && <Badge tone="violet" className="!normal-case"><Wrench size={10} /> maintenance · not notified</Badge>}
                   {a.acknowledged_at && <Badge tone="ok"><Check size={10} /> ack by {a.acknowledged_by}</Badge>}
                 </div>
                 <div className="mt-1.5 font-medium">{a.title}</div>

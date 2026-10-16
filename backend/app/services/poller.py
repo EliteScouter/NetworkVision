@@ -41,6 +41,7 @@ from .clients import tracker as client_tracker
 from .dhcp import dhcp
 from .keepass import keepass
 from .logs import pipeline
+from .runtime import runtime
 from .state import DeviceState, store
 
 log = logging.getLogger("networkvision.poller")
@@ -397,13 +398,13 @@ class Poller:
             await asyncio.sleep(600)
 
     async def _retention_loop(self) -> None:
-        s = get_settings()
         await asyncio.sleep(60)
         while True:
             try:
                 now = time.time()
-                metrics_cutoff = now - s.retention_days_metrics * 86400
-                rollup_cutoff = now - s.retention_days_rollup * 86400
+                days = {k: int(runtime.get(f"retention_days_{k}")) for k in ("metrics", "rollup", "logs", "alerts")}
+                metrics_cutoff = now - days["metrics"] * 86400
+                rollup_cutoff = now - days["rollup"] * 86400
                 removed = {
                     "device metrics": await delete_in_chunks(DeviceMetric, DeviceMetric.ts < metrics_cutoff),
                     "interface metrics": await delete_in_chunks(InterfaceMetric, InterfaceMetric.ts < metrics_cutoff),
@@ -411,11 +412,11 @@ class Poller:
                     "radio metrics": await delete_in_chunks(RadioMetric, RadioMetric.ts < metrics_cutoff),
                     **{f"hourly {m.__tablename__}": await delete_in_chunks(m, m.ts < rollup_cutoff) for m in (
                         DeviceMetricHourly, InterfaceMetricHourly, GatewayMetricHourly, RadioMetricHourly)},
-                    "logs": await delete_in_chunks(LogEntry, LogEntry.ts < now - s.retention_days_logs * 86400),
+                    "logs": await delete_in_chunks(LogEntry, LogEntry.ts < now - days["logs"] * 86400),
                     "alerts": await delete_in_chunks(Alert, Alert.resolved_at.is_not(None)
-                                                     & (Alert.resolved_at < now - s.retention_days_alerts * 86400)),
+                                                     & (Alert.resolved_at < now - days["alerts"] * 86400)),
                     "security events": await delete_in_chunks(
-                        SecurityEvent, SecurityEvent.ts < now - s.retention_days_security * 86400),
+                        SecurityEvent, SecurityEvent.ts < now - get_settings().retention_days_security * 86400),
                     "dhcp clients": await delete_in_chunks(DhcpClient, DhcpClient.last_seen < now - 90 * 86400),
                 }
                 if any(removed.values()):

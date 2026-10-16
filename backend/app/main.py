@@ -18,6 +18,7 @@ from .api import auth, data, devices, insights, ws
 from .api import firewall as firewall_api
 from .api import history as history_api
 from .api import network as network_api
+from .api import settings as settings_api
 from .api import speedtest as speedtest_api
 from .collectors import registry
 from .config import get_settings
@@ -32,6 +33,7 @@ from .services.keepass import keepass
 from .services.logs import pipeline
 from .services.mfa import mfa
 from .services.poller import poller
+from .services.runtime import DEVICE_THRESHOLDS, runtime, window_dict
 from .services.security import security
 from .services.speedtest import speedtest
 
@@ -53,6 +55,7 @@ async def lifespan(_: FastAPI):
         log.warning("No admin password set (NV_ADMIN_PASSWORD / NV_ADMIN_PASSWORD_HASH) - logins are impossible")
     await init_db()
     await mfa.load()
+    await runtime.load()
     if keepass.configured:
         st = await asyncio.to_thread(keepass.status)
         if st.get("ok"):
@@ -121,6 +124,7 @@ app.include_router(network_api.router)
 app.include_router(speedtest_api.router)
 app.include_router(insights.router)
 app.include_router(firewall_api.router)
+app.include_router(settings_api.router)
 app.include_router(ws.router)
 
 
@@ -139,10 +143,9 @@ async def meta(_: str = Depends(require_user)) -> dict:
         "notifications": notifier.enabled(), "ws_clients": bus.subscribers,
         "logs": {"received": pipeline.received, "dropped": pipeline.dropped},
         "collectors": [c["kind"] for c in registry.available()],
-        "retention": {"metrics_days": s.retention_days_metrics, "logs_days": s.retention_days_logs},
-        "thresholds": {"cpu": s.alert_cpu_pct, "mem": s.alert_mem_pct, "temp": s.alert_temp_c,
-                       "latency_ms": s.alert_latency_ms, "loss_pct": s.alert_loss_pct,
-                       "if_util": s.alert_if_util_pct, "if_errors": s.alert_if_errors_per_min},
+        "retention": {"metrics_days": runtime.get("retention_days_metrics"), "logs_days": runtime.get("retention_days_logs")},
+        "thresholds": {short: runtime.get(name) for short, name in DEVICE_THRESHOLDS.items()},
+        "maintenance": [window_dict(w) for w in runtime.active_windows()],
     }
 
 

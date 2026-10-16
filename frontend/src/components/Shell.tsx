@@ -13,6 +13,7 @@ import {
   Search,
   Server,
   ShieldAlert,
+  SlidersHorizontal,
   Users,
   Wifi,
   X,
@@ -25,6 +26,7 @@ import { useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
 import type { DeviceSummary } from "../lib/types";
 import { DeviceIcon } from "./DeviceIcon";
+import { MaintenanceBanner } from "../pages/Settings";
 import { HistoryExplorerHost } from "./HistoryExplorer";
 import { StatusDot } from "./ui";
 
@@ -41,6 +43,7 @@ const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/alerts", label: "Alerts", icon: Bell },
   { to: "/integrations", label: "Integrations", icon: Plug },
+  { to: "/settings", label: "Settings", icon: SlidersHorizontal },
 ];
 
 export function Logo({ size = 30 }: { size?: number }) {
@@ -223,8 +226,8 @@ export function Shell({ children, user, demo }: { children: ReactNode; user: str
     return () => window.removeEventListener("keydown", fn);
   }, []);
 
-  const critical = Object.values(alerts).filter((a) => a.severity === "critical").length;
-  const warning = Object.values(alerts).filter((a) => a.severity === "warning").length;
+  const critical = Object.values(alerts).filter((a) => a.severity === "critical" && !a.suppressed).length;
+  const warning = Object.values(alerts).filter((a) => a.severity === "warning" && !a.suppressed).length;
   const down = Object.values(devices).filter((d) => d.status === "down" && d.enabled).length;
   const title = NAV.find((n) => (n.to === "/" ? loc.pathname === "/" : loc.pathname.startsWith(n.to)))?.label ?? "NetworkVision";
 
@@ -305,6 +308,7 @@ export function Shell({ children, user, demo }: { children: ReactNode; user: str
             <UtcClock />
           </div>
         </header>
+        <MaintenanceBanner />
         <main className="min-h-0 flex-1 overflow-y-auto pb-20 md:pb-0">
           <AnimatePresence mode="wait">
             <motion.div key={loc.pathname.split("/")[1]} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
