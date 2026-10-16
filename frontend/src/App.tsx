@@ -11,6 +11,7 @@ import DeviceDetailPage from "./pages/DeviceDetail";
 import DevicesPage from "./pages/Devices";
 import IntegrationsPage from "./pages/Integrations";
 import LoginPage from "./pages/Login";
+import FirewallPage from "./pages/Firewall";
 import LogsPage from "./pages/Logs";
 import OverviewPage from "./pages/Overview";
 import SpeedtestPage from "./pages/Speedtest";
@@ -37,6 +38,7 @@ function Authed({ me }: { me: Me }) {
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/wifi" element={<WifiPage />} />
         <Route path="/speedtest" element={<SpeedtestPage />} />
+        <Route path="/firewall" element={<FirewallPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/integrations" element={<IntegrationsPage meta={meta} />} />

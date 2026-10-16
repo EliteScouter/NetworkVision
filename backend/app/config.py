@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     syslog_port: int = 5514
     syslog_tcp_enabled: bool = True
 
+    # --- Firewall log explorer (pfSense / OPNsense filterlog) ----------------
+    firewall_enabled: bool = True
+    retention_days_firewall: int = Field(default=7, ge=1)
+    firewall_store_pass: bool = True  # false: count pass events but only store block/reject rows
+    firewall_store_noise: bool = True  # false: count multicast/broadcast/IPv6 link-local chatter, don't store it
+    firewall_keep_raw_logs: bool = True  # false: filterlog lines go only to the Firewall page, not to Logs
+
     # --- Alert thresholds -----------------------------------------------------
     alert_cpu_pct: float = 90
     alert_mem_pct: float = 92

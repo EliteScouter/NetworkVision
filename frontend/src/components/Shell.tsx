@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import {
   Bell,
+  BrickWall,
   Gauge,
   Gauge as GaugeIcon,
   LogOut,
@@ -32,6 +33,7 @@ const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/clients", label: "Clients", icon: Users },
   { to: "/wifi", label: "WiFi", icon: Wifi },
   { to: "/speedtest", label: "Speedtest", icon: Gauge },
+  { to: "/firewall", label: "Firewall", icon: BrickWall },
   { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/alerts", label: "Alerts", icon: Bell },
   { to: "/integrations", label: "Integrations", icon: Plug },

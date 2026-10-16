@@ -23,6 +23,7 @@ something goes wrong. It ships as a single Docker container that drops straight 
 - **History explorer**: click any chart for 1h to 1y or a custom range, drag to zoom, peaks overlay, min/avg/max/p95, data moved, and CSV export. Hourly rollups keep long ranges fast.
 - **Speed test**: built-in (Cloudflare's speed-test network, no binary). Download, upload, latency, jitter and **bufferbloat** (latency under load). Scheduled (hourly by default) or on demand, with history and a "slower than expected" alert.
 - **Log explorer**: a built-in syslog receiver (UDP + TCP, RFC 3164/5424) plus logs pulled from device APIs. You get a severity histogram, full-text search with `-exclusions`, filters, and live tail.
+- **Firewall explorer**: pfSense / OPNsense `filterlog` (syslog or API) parsed into searchable events with friendly interface names (igb0.20 → HOME) and rule descriptions (tracker → "pfB_Top_v4 auto rule"). Live tail, click-to-filter IPs/ports/rules, CIDR search, a zoomable pass/block timeline, top blocked sources, ports, rules and interfaces. Optionally count but skip storing pass traffic or multicast noise.
 - **Alerts**: device down, gateway down/loss/latency, high CPU/mem/temp, link down, port flapping, port errors, saturation, critical syslog, and firmware updates. Alerts are debounced and auto-resolve. You can ack or resolve them, and route them to Discord, Slack, ntfy, or any webhook.
 - **Fast filtering everywhere**, plus a `Ctrl+K` command palette.
 - **Demo mode** gives you a full simulated homelab to explore before connecting anything.

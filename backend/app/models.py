@@ -249,3 +249,63 @@ GatewayMetricHourly = _hourly("gateway_metrics_hourly", {
 RadioMetricHourly = _hourly("radio_metrics_hourly", {
     "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE")),
     "radio": mapped_column(String(16))}, RADIO_VALUES)
+
+
+class FirewallEvent(Base):
+    """One parsed filterlog record (pfSense / OPNsense).
+
+    ``device_id`` is deliberately not a foreign key: deleting a firewall must not turn into one
+    giant UPDATE over millions of rows on a Galera cluster. IPs are stored twice: compressed for
+    display and as a 32-hex sortable key (IPv4 mapped into ::ffff:0:0/96) so exact matches and
+    CIDR searches are both index range scans.
+    """
+
+    __tablename__ = "firewall_events"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Float)
+    device_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(8))  # pass | block | reject | match
+    direction: Mapped[str] = mapped_column(String(4), default="")
+    iface: Mapped[str] = mapped_column(String(32), default="")  # real NIC (igb0.20)
+    iface_name: Mapped[str] = mapped_column(String(48), default="")  # friendly (HOME)
+    rule_id: Mapped[str] = mapped_column(String(40), default="")  # tracker / OPNsense label
+    rule: Mapped[str] = mapped_column(String(128), default="")  # resolved description
+    ipver: Mapped[int] = mapped_column(SmallInteger, default=4)
+    proto: Mapped[str] = mapped_column(String(12), default="")
+    src_ip: Mapped[str] = mapped_column(String(45))
+    src_key: Mapped[str] = mapped_column(String(32))
+    src_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dst_ip: Mapped[str] = mapped_column(String(45))
+    dst_key: Mapped[str] = mapped_column(String(32))
+    dst_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tcp_flags: Mapped[str] = mapped_column(String(12), default="")
+    length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    info: Mapped[str] = mapped_column(String(64), default="")
+    noise: Mapped[bool] = mapped_column(Boolean, default=False)  # multicast / broadcast / link-local chatter
+
+    __table_args__ = (
+        Index("ix_fw_ts", "ts"),
+        Index("ix_fw_action_ts", "action", "ts"),
+        Index("ix_fw_src_ts", "src_key", "ts"),
+        Index("ix_fw_dst_ts", "dst_key", "ts"),
+        Index("ix_fw_dport_ts", "dst_port", "ts"),
+        Index("ix_fw_iface_ts", "iface_name", "ts"),
+        Index("ix_fw_rule_ts", "rule_id", "ts"),
+    )
+
+
+class FirewallMinute(Base):
+    """Per-minute counts of every firewall event, including the ones not stored individually."""
+
+    __tablename__ = "firewall_minutes"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Float)  # minute start
+    device_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(8))
+    iface_name: Mapped[str] = mapped_column(String(48), default="")
+    events: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)  # counted but not stored (pass / noise filters)
+
+    __table_args__ = (Index("ix_fwmin_ts", "ts"),)

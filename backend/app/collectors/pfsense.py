@@ -134,10 +134,14 @@ class PfSenseCollector(HttpCollector):
         rules = await self.api("firewall/rules", optional=True) or []
         if rules:
             snap.sections.append(Section(
-                id="rules", title="Firewall rules", columns=["#", "Iface", "Action", "Proto", "Source", "Destination", "Description", "Disabled"],
+                id="rules", title="Firewall rules",
+                columns=["#", "Iface", "Action", "Proto", "Source", "Destination", "Description", "Disabled", "Tracker"],
+                # The tracker is what filterlog lines carry; the Firewall page resolves it to the description
+                # (pfBlockerNG's "pfB_* auto rule" entries are ordinary rules here, so they resolve too).
                 rows=[[i, pick(r, "interface", default=""), pick(r, "type", default=""), pick(r, "protocol", default="any"),
                        _addr(r.get("source")), _addr(r.get("destination")), pick(r, "descr", default=""),
-                       bool(pick(r, "disabled", default=False))] for i, r in enumerate(rules)],
+                       bool(pick(r, "disabled", default=False)), str(pick(r, "tracker", default="") or "")]
+                      for i, r in enumerate(rules)],
             ))
 
         limit = int(self.opt("log_lines") or 50)
