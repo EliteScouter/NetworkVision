@@ -29,6 +29,7 @@ from .http_base import TLS_FIELDS, HttpCollector, NotFound, first_number
 
 ROLE_BY_TYPE = {"usw": "switch", "uap": "ap", "ugw": "router", "udm": "router", "uxg": "router",
                 "ucg": "router", "uck": "controller", "ubb": "bridge", "uph": "phone"}
+GATEWAY_TYPES = {"ugw", "udm", "uxg", "ucg"}
 STATE = {0: "disconnected", 1: "connected", 2: "pending", 4: "upgrading", 5: "provisioning",
          6: "heartbeat missed", 7: "adopting", 9: "adoption failed", 10: "isolated", 11: "rf scanning"}
 
@@ -150,15 +151,25 @@ class UnifiCollector(HttpCollector):
         snap.metrics["devices"] = len(devices)
         snap.metrics["devices_offline"] = sum(1 for d in devices if d.get("state") != 1)
 
+        # UniFi can only measure the internet through its *own* gateway. With a third-party
+        # router (pfSense, OPNsense...) the "www" subsystem is just "unknown" - not "down".
+        has_unifi_gateway = any(d.get("type") in GATEWAY_TYPES for d in devices)
         for sub in health:
             name = sub.get("subsystem")
-            if name == "www":
+            status = str(sub.get("status") or "").lower()
+            if name == "www" and has_unifi_gateway and status not in ("", "unknown"):
+                down, up = sub.get("xput_down"), sub.get("xput_up")
+                detail = []
+                if down is not None and up is not None:
+                    detail.append(f"speedtest down {down} / up {up} Mbps")
+                if sub.get("drops"):
+                    detail.append(f"{sub['drops']} connectivity drops")
                 snap.gateways.append(Gateway(
                     name="Internet", address=str(sub.get("gw_name", "")),
-                    up=sub.get("status") == "ok" if sub.get("status") else None,
+                    up=status != "error",
                     latency_ms=first_number(sub.get("latency")),
-                    loss_pct=first_number(sub.get("drops")),
-                    detail=f"down {sub.get('xput_down', '?')} / up {sub.get('xput_up', '?')} Mbps (speedtest)",
+                    loss_pct=None,  # "drops" is a count of failed checks, not a percentage
+                    detail="; ".join(detail),
                 ))
             elif name == "wan" and sub.get("wan_ip"):
                 snap.facts["wan_ip"] = sub.get("wan_ip")
