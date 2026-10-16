@@ -36,11 +36,37 @@ class OpnSenseCollector(HttpCollector):
     ]
 
     async def api(self, path: str, method: str = "GET", optional: bool = True, **kwargs: Any) -> Any:
+        """Call the API, coping with OPNsense's camelCase -> snake_case action renames.
+
+        Newer releases only accept e.g. ``system_information``; older ones only
+        ``systemInformation``. Whichever style works first is remembered.
+        """
         key, secret = self.opt("api_key"), self.opt("api_secret")
         if not key or not secret:
             raise CollectorError("OPNsense API key and secret are required")
-        call = self.try_json if optional else self.request_json
-        return await call(method, f"/api/{path}", auth=(key, secret), **kwargs)
+        snake = _snake_path(path)
+        candidates = [path] if snake == path else ([snake, path] if self._snake is not False else [path, snake])
+        for i, candidate in enumerate(candidates):
+            try:
+                result = await self.request_json(method, f"/api/{candidate}", auth=(key, secret), **kwargs)
+            except NotFound:
+                if i + 1 < len(candidates):
+                    continue
+                if optional:
+                    return None
+                raise
+            except CollectorError:
+                if optional:
+                    return None
+                raise
+            if snake != path:
+                self._snake = candidate == snake
+            return result
+        return None
+
+    def __init__(self, host: str, config: dict[str, Any], secrets: dict[str, Any]) -> None:
+        super().__init__(host, config, secrets)
+        self._snake: bool | None = None  # unknown until the first renamed action answers
 
     async def collect(self) -> Snapshot:
         snap = Snapshot()
@@ -180,6 +206,15 @@ class OpnSenseCollector(HttpCollector):
                     ts=p.ts, message=text or p.message, app=str(row.get("process_name", p.app)),
                     severity=_SEV.get(str(row.get("severity", "")).lower(), p.severity), facility=scope,
                 ))
+
+
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _snake_path(path: str) -> str:
+    """'diagnostics/system/systemInformation' -> 'diagnostics/system/system_information' (query string untouched)."""
+    base, sep, query = path.partition("?")
+    return "/".join(_CAMEL.sub("_", seg).lower() for seg in base.split("/")) + sep + query
 
 
 def _i(v: Any) -> int | None:

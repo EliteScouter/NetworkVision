@@ -58,7 +58,8 @@ class HttpCollector(Collector):
                 "the scheme or port is probably wrong (e.g. http vs https, or the web GUI runs on another port)")
         if r.status_code in (401, 403):
             raise CollectorError(f"Authentication failed ({r.status_code}) for {path}")
-        if r.status_code == 404:
+        if r.status_code == 404 or (r.status_code == 400 and "not found" in r.text[:300].lower()):
+            # OPNsense answers unknown actions with 400 "action ... not found"
             raise NotFound(path)
         if r.status_code >= 400:
             raise CollectorError(f"HTTP {r.status_code} for {path}: {r.text[:200]}")
