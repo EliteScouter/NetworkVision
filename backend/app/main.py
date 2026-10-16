@@ -18,6 +18,7 @@ from .api import auth, data, devices, insights, ws
 from .api import firewall as firewall_api
 from .api import history as history_api
 from .api import network as network_api
+from .api import services as services_api
 from .api import settings as settings_api
 from .api import speedtest as speedtest_api
 from .collectors import registry
@@ -36,6 +37,7 @@ from .services.poller import poller
 from .services.runtime import DEVICE_THRESHOLDS, runtime, window_dict
 from .services.security import security
 from .services.speedtest import speedtest
+from .services.uptime import monitor as uptime_monitor
 
 
 def _setup_logging() -> None:
@@ -75,16 +77,20 @@ async def lifespan(_: FastAPI):
     await poller.start()
     await speedtest.load()
     speed_task = asyncio.create_task(speedtest.scheduler(), name="speedtest-scheduler")
+    await uptime_monitor.load()
+    uptime_task = asyncio.create_task(uptime_monitor.run(), name="uptime-scheduler")
     try:
         yield
     finally:
         await poller.stop()
         for h in handles:
             h.close()
-        for task in (speed_task, *side_tasks):
+        for task in (speed_task, uptime_task, *side_tasks):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        with contextlib.suppress(Exception):
+            await uptime_monitor.stop()
         with contextlib.suppress(Exception):
             await security.flush()
         with contextlib.suppress(Exception):
@@ -125,6 +131,7 @@ app.include_router(speedtest_api.router)
 app.include_router(insights.router)
 app.include_router(firewall_api.router)
 app.include_router(settings_api.router)
+app.include_router(services_api.router)
 app.include_router(ws.router)
 
 

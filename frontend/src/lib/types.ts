@@ -270,12 +270,12 @@ export interface MaintenanceWindow {
 }
 
 // ------------------------------------------------------------------ history
-export type HistoryKind = "device" | "interface" | "gateway" | "radio" | "speedtest";
+export type HistoryKind = "device" | "interface" | "gateway" | "radio" | "speedtest" | "service";
 
 export interface HistoryTarget {
   kind: HistoryKind;
   title: string;
-  /** Filters for the series (device_id, ifname, name, radio). */
+  /** Filters for the series (device_id, ifname, name, radio, service_id). */
   filters?: Record<string, string | number>;
   /** Which columns to plot and how. */
   series: { key: string; label: string; color: string }[];
@@ -513,4 +513,45 @@ export interface DhcpOverview {
   learning: boolean;
   stats: { total: number; active: number; macs: number; new_24h: number; unknown: number; issues: number };
   sources: Record<string, string | null>;
+}
+
+// ------------------------------------------------------------------ services (uptime)
+export type ServiceKind = "http" | "tcp" | "dns" | "tls";
+export type ServiceStatus = "up" | "degraded" | "down" | "pending" | "paused";
+
+export interface ServiceConfig {
+  fail_threshold: number; slow_ms: number | null;
+  expected_status: string; keyword: string; method: "GET" | "HEAD"; follow_redirects: boolean; verify_tls: boolean; check_cert: boolean;
+  record_type: "A" | "AAAA" | "ANY"; expected: string[];
+  sni: string; cert_warn_days: number; cert_crit_days: number;
+}
+export interface CertInfo {
+  not_after: number; days_left: number; issuer: string; subject: string; sans: string[]; san_match: boolean; valid: boolean; error: string;
+}
+export interface ServiceState {
+  status: ServiceStatus; last_ts: number | null; last_ok_ts: number | null; fails: number; response_ms: number | null; error: string;
+  detail: Record<string, unknown>; incident_started: number | null; running: boolean; next_due: number | null;
+  cert: CertInfo | null; cert_error: string; spark: (number | null)[];
+}
+export interface ServiceDef {
+  id: number; name: string; kind: ServiceKind; target: string; port: number | null; enabled: boolean;
+  interval_s: number; timeout_s: number; config: ServiceConfig; tags: string[]; notes: string;
+}
+export interface ServiceItem extends ServiceDef {
+  state: ServiceState;
+  uptime: Partial<Record<"24h" | "7d" | "30d" | "90d", number | null>>;
+  /** Daily uptime % (oldest first, null = no data), last element = the 24h ending now. */
+  bars: (number | null)[];
+}
+export interface ServiceIncident {
+  id: number; service_id: number; service: string | null; started_at: number; ended_at: number | null;
+  duration_s: number; error: string; checks_failed: number; ongoing: boolean;
+}
+export interface ServicesResponse {
+  services: ServiceItem[];
+  summary: { total: number; up: number; degraded: number; down: number; pending: number; paused: number;
+    certs_expiring: number; soonest_cert: { id: number; name: string; days_left: number } | null };
+}
+export interface ServiceTestResult {
+  ok: boolean; response_ms: number | null; error: string; detail: Record<string, unknown>; cert: CertInfo | null;
 }

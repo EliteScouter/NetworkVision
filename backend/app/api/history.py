@@ -17,6 +17,7 @@ async def get_history(
     ifname: str | None = None,
     name: str | None = None,
     radio: str | None = None,
+    service_id: int | None = None,
     range_: str = Query("24h", alias="range"),
     since: float | None = None,
     until: float | None = None,
@@ -27,7 +28,7 @@ async def get_history(
         raise HTTPException(404, f"Unknown series '{kind}'. Valid: {', '.join(history.SERIES)}")
     try:
         start, end = history.resolve_range(range_, since, until)
-        filters = {"device_id": device_id, "ifname": ifname, "name": name, "radio": radio}
+        filters = {"device_id": device_id, "ifname": ifname, "name": name, "radio": radio, "service_id": service_id}
         return await history.query(kind, filters, start, end, points)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e

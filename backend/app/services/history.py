@@ -24,6 +24,7 @@ from ..models import (
     GATEWAY_VALUES,
     INTERFACE_VALUES,
     RADIO_VALUES,
+    SERVICE_VALUES,
     DeviceMetric,
     DeviceMetricHourly,
     GatewayMetric,
@@ -32,6 +33,8 @@ from ..models import (
     InterfaceMetricHourly,
     RadioMetric,
     RadioMetricHourly,
+    ServiceCheck,
+    ServiceCheckHourly,
     Setting,
     SpeedtestResult,
 )
@@ -56,6 +59,7 @@ SERIES: dict[str, Series] = {
     "interface": Series(InterfaceMetric, InterfaceMetricHourly, ("device_id", "ifname"), tuple(INTERFACE_VALUES)),
     "gateway": Series(GatewayMetric, GatewayMetricHourly, ("device_id", "name"), tuple(GATEWAY_VALUES)),
     "radio": Series(RadioMetric, RadioMetricHourly, ("device_id", "radio"), tuple(RADIO_VALUES)),
+    "service": Series(ServiceCheck, ServiceCheckHourly, ("service_id",), tuple(SERVICE_VALUES)),
     "speedtest": Series(SpeedtestResult, None, (), ("download_bps", "upload_bps", "latency_ms", "jitter_ms")),
 }
 

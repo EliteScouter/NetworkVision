@@ -109,3 +109,19 @@ export function deviceColor(status: string, health: string): string {
   if (health === "warning" || status === "degraded") return HEALTH_COLOR.warning;
   return STATUS_COLOR.up;
 }
+
+/** Status-page colors: green only when it really was (almost) always up. */
+export function uptimeColor(p: number | null | undefined): string {
+  if (p == null) return "#1e2a44";
+  if (p >= 99.9) return "#34d399";
+  if (p >= 99) return "#a3e635";
+  if (p >= 95) return "#fbbf24";
+  if (p >= 80) return "#fb923c";
+  return "#fb4d6d";
+}
+
+export function fmtUptime(p: number | null | undefined): string {
+  if (p == null) return "—";
+  if (p >= 99.995) return "100%";
+  return `${p >= 99 ? p.toFixed(2) : p.toFixed(1)}%`;
+}

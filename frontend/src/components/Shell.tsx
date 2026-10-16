@@ -4,6 +4,7 @@ import {
   BrickWall,
   Gauge,
   Gauge as GaugeIcon,
+  HeartPulse,
   LogOut,
   type LucideIcon,
   Network,
@@ -37,6 +38,7 @@ const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: "/clients", label: "Clients", icon: Users },
   { to: "/dhcp", label: "DHCP", icon: Radar },
   { to: "/wifi", label: "WiFi", icon: Wifi },
+  { to: "/services", label: "Services", icon: HeartPulse },
   { to: "/speedtest", label: "Speedtest", icon: Gauge },
   { to: "/security", label: "Security", icon: ShieldAlert },
   { to: "/firewall", label: "Firewall", icon: BrickWall },
@@ -318,7 +320,7 @@ export function Shell({ children, user, demo }: { children: ReactNode; user: str
           </AnimatePresence>
         </main>
         {/* mobile bottom nav */}
-        <nav className="fixed inset-x-0 bottom-0 z-20 flex justify-around border-t border-edge bg-abyss/90 py-2 backdrop-blur-xl md:hidden">
+        <nav className="fixed inset-x-0 bottom-0 z-20 flex gap-1 overflow-x-auto border-t border-edge bg-abyss/90 px-2 py-2 backdrop-blur-xl md:hidden">
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === "/"} className={({ isActive }) => clsx("p-2", isActive ? "text-cyan" : "text-dim")}>
               <n.icon size={20} />

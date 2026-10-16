@@ -255,6 +255,55 @@ class SpeedtestResult(Base):
     error: Mapped[str] = mapped_column(Text, default="")
 
 
+class Service(Base):
+    """An externally reachable service watched for availability (HTTP, TCP, DNS, TLS)."""
+
+    __tablename__ = "services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128))
+    kind: Mapped[str] = mapped_column(String(16))  # http | tcp | dns | tls
+    target: Mapped[str] = mapped_column(String(2048))  # URL for http, hostname/IP otherwise
+    port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    interval_s: Mapped[int] = mapped_column(Integer, default=60)
+    timeout_s: Mapped[float] = mapped_column(Double, default=10)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)  # per-kind options + alert thresholds
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[float] = mapped_column(Double, default=now)
+    updated_at: Mapped[float] = mapped_column(Double, default=now, onupdate=now)
+
+
+class ServiceCheck(Base):
+    """One check result. ``status`` 1 up / 0 down, so its hourly average is the uptime fraction."""
+
+    __tablename__ = "service_checks"
+
+    id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
+    ts: Mapped[float] = mapped_column(Double)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"))
+    status: Mapped[int] = mapped_column(SmallInteger, default=1)
+    response_ms: Mapped[float | None] = mapped_column(Double, nullable=True)
+    cert_days: Mapped[float | None] = mapped_column(Double, nullable=True)
+    error: Mapped[str] = mapped_column(String(255), default="")
+
+    __table_args__ = (Index("ix_svcchecks_svc_ts", "service_id", "ts"),)
+
+
+class ServiceIncident(Base):
+    """A confirmed outage (N consecutive failures) - kept as long as alerts, beyond raw-sample retention."""
+
+    __tablename__ = "service_incidents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), index=True)
+    started_at: Mapped[float] = mapped_column(Double, index=True)
+    ended_at: Mapped[float | None] = mapped_column(Double, nullable=True)
+    error: Mapped[str] = mapped_column(String(255), default="")
+    checks_failed: Mapped[int] = mapped_column(Integer, default=0)
+
+
 def _hourly(name: str, keys: dict[str, Any], values: list[str]) -> type:
     """Build an hourly rollup model: keys + ts (hour start) + <value>_avg / <value>_max."""
     attrs: dict[str, Any] = {
@@ -277,6 +326,7 @@ DEVICE_VALUES = ["status", "cpu", "mem", "temp", "latency_ms", "loss_pct", "rx_b
 INTERFACE_VALUES = ["rx_bps", "tx_bps", "errors_per_min", "util_pct"]
 GATEWAY_VALUES = ["up", "latency_ms", "loss_pct"]
 RADIO_VALUES = ["utilization", "interference", "clients", "satisfaction", "retries_pct"]
+SERVICE_VALUES = ["status", "response_ms", "cert_days"]
 
 DeviceMetricHourly = _hourly("device_metrics_hourly", {
     "device_id": mapped_column(ForeignKey("devices.id", ondelete="CASCADE"))}, DEVICE_VALUES)
@@ -393,3 +443,7 @@ class FirewallMinute(Base):
     skipped: Mapped[int] = mapped_column(Integer, default=0)  # counted but not stored (pass / noise filters)
 
     __table_args__ = (Index("ix_fwmin_ts", "ts"),)
+
+
+ServiceCheckHourly = _hourly("service_checks_hourly", {
+    "service_id": mapped_column(ForeignKey("services.id", ondelete="CASCADE"))}, SERVICE_VALUES)

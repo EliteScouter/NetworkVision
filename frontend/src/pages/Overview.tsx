@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Gauge as SpeedIcon,
   Globe,
+  HeartPulse,
   type LucideIcon,
   Network,
   Radar,
@@ -22,11 +23,11 @@ import { AreaChart, Gauge, Sparkline } from "../components/charts";
 import { DeviceIcon } from "../components/DeviceIcon";
 import { TopologyGraph } from "../components/TopologyGraph";
 import { Badge, CountUp, Empty, Meter, Panel, StatusDot } from "../components/ui";
-import { ago, bps, bpsParts, clock, deviceColor, ms, SEV_NAMES, sevColor, utilColor } from "../lib/format";
+import { ago, bps, bpsParts, clock, deviceColor, fmtUptime, ms, SEV_NAMES, sevColor, utilColor } from "../lib/format";
 import { useHistory } from "../components/HistoryExplorer";
 import { useApi, useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
-import type { Overview, SpeedStatus, Topology } from "../lib/types";
+import type { Overview, ServicesResponse, SpeedStatus, Topology } from "../lib/types";
 
 function Kpi({ icon: Icon, label, children, sub, tone = "#22d3ee", delay = 0, to }: {
   icon: LucideIcon;
@@ -58,6 +59,27 @@ function Kpi({ icon: Icon, label, children, sub, tone = "#22d3ee", delay = 0, to
   return to ? <Link to={to} className="block">{body}</Link> : body;
 }
 
+function ServicesKpi({ data }: { data: ServicesResponse | null }) {
+  const sm = data?.summary;
+  const worst = data?.services.filter((s) => s.enabled && s.uptime["24h"] != null)
+    .sort((a, b) => (a.uptime["24h"] ?? 100) - (b.uptime["24h"] ?? 100))[0];
+  const tone = !sm ? "#34d399" : sm.down ? "#fb4d6d" : sm.degraded || sm.certs_expiring ? "#fbbf24" : "#34d399";
+  const cert = sm?.soonest_cert;
+  return (
+    <Kpi icon={HeartPulse} label="Services" to="/services" delay={0.22} tone={tone}
+      sub={!sm?.total ? "add websites & ports you host" : (
+        <span>
+          {sm.down ? <span className="text-crit">{data!.services.filter((s) => s.state.status === "down").map((s) => s.name).slice(0, 2).join(", ")} down</span>
+            : worst ? <>lowest 24h {fmtUptime(worst.uptime["24h"])}</> : "all up"}
+          {cert && <> · <span className={cert.days_left < 21 ? "text-warn" : ""}>cert {Math.max(0, Math.floor(cert.days_left))}d</span></>}
+        </span>
+      )}>
+      <CountUp value={(sm?.up ?? 0) + (sm?.degraded ?? 0)} className={sm?.down ? "text-crit" : ""} />
+      <span className="text-base text-dim"> / {(sm?.total ?? 0) - (sm?.paused ?? 0)}</span>
+    </Kpi>
+  );
+}
+
 function Bps({ v }: { v: number }) {
   const [n, u] = bpsParts(v);
   return (
@@ -72,6 +94,7 @@ export default function OverviewPage() {
   const { data: ov } = useApi<Overview>("/overview", 5000);
   const { data: topo } = useApi<Topology>("/topology", 10000);
   const { data: speed } = useApi<SpeedStatus>("/speedtest", 60000);
+  const { data: svcs } = useApi<ServicesResponse>("/services", 30000);
   const openHistory = useHistory((s) => s.open);
   const devices = useLive((s) => s.devices);
   const logs = useLive((s) => s.logs);
@@ -115,7 +138,7 @@ export default function OverviewPage() {
         </div>
       </Panel>
 
-      <div className="col-span-12 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:col-span-9">
+      <div className="col-span-12 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:col-span-9">
         <Kpi icon={Server} label="Devices" to="/devices" delay={0.02} tone="#34d399"
           sub={<>{ov?.devices.total ?? 0} monitored · {ov?.ports.up ?? 0}/{ov?.ports.total ?? 0} ports up</>}>
           <CountUp value={ov?.devices.up ?? 0} />
@@ -145,6 +168,7 @@ export default function OverviewPage() {
           sub={speed?.last ? <>↑ {bps(speed.last.upload_bps)} · {speed.last.latency_ms?.toFixed(1)} ms · {ago(speed.last.ts)}</> : "no test yet"}>
           {speed?.last ? <Bps v={speed.last.download_bps ?? 0} /> : <span className="text-dim">—</span>}
         </Kpi>
+        <ServicesKpi data={svcs} />
         <Kpi icon={ScrollText} label="Log rate" to="/logs" delay={0.23} tone="#fbbf24" sub={`${ov?.ports.errors ?? 0} ports with errors`}>
           <CountUp value={ov?.logs_per_min ?? 0} />
           <span className="ml-1 text-sm text-dim">/min</span>
@@ -167,7 +191,7 @@ export default function OverviewPage() {
           <AnimatePresence initial={false}>
             {activeAlerts.slice(0, 30).map((a) => (
               <motion.button key={a.id} layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
-                onClick={() => a.device_id && nav(`/devices/${a.device_id}`)}
+                onClick={() => (a.device_id ? nav(`/devices/${a.device_id}`) : a.key.startsWith("svc:") && nav("/services"))}
                 className={clsx("relative w-full overflow-hidden rounded-xl border bg-black/20 p-3 text-left transition hover:bg-white/[0.03]",
                   a.severity === "critical" ? "border-crit/30" : a.severity === "warning" ? "border-warn/25" : "border-edge")}>
                 <span className={clsx("absolute inset-y-0 left-0 w-0.5", a.severity === "critical" ? "bg-crit" : a.severity === "warning" ? "bg-warn" : "bg-info")} />

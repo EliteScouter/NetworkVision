@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import func, select
 
 from .db import sessionmaker
-from .models import Device, Link
+from .models import Device, Link, Service
 
 log = logging.getLogger("networkvision.demo")
 
@@ -26,7 +26,29 @@ DEMO_DEVICES = [
 ]
 
 
+DEMO_SERVICES = [
+    # name, kind, target, port, config
+    ("Nextcloud", "http", "https://cloud.example.net/status.php", None, {"keyword": "installed", "slow_ms": 1500}),
+    ("Vaultwarden", "http", "https://vault.example.net/alive", None, {}),
+    ("Plex", "tcp", "plex.example.net", 32400, {}),
+    ("Home Assistant", "http", "https://ha.example.net/", None, {}),
+    ("Public DNS", "dns", "cloud.example.net", None, {"expected": ["203.0.113.42"]}),
+    ("Mail (SMTPS)", "tls", "mail.example.net", 465, {}),
+]
+
+
+async def seed_demo_services() -> None:
+    async with sessionmaker()() as db:
+        if (await db.execute(select(func.count(Service.id)))).scalar():
+            return
+        for name, kind, target, port, cfg in DEMO_SERVICES:
+            db.add(Service(name=name, kind=kind, target=target, port=port, config=cfg, tags=["demo"]))
+        await db.commit()
+    log.info("Demo mode: seeded %d simulated services", len(DEMO_SERVICES))
+
+
 async def seed_demo() -> None:
+    await seed_demo_services()
     async with sessionmaker()() as db:
         if (await db.execute(select(func.count(Device.id)))).scalar():
             return
