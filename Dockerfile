@@ -8,7 +8,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---------- 2. Python runtime ----------
-FROM python:3.13-slim AS runtime
+FROM python:3.14-slim AS runtime
 ARG NV_VERSION=""
 ENV NV_VERSION=${NV_VERSION} \
     PYTHONDONTWRITEBYTECODE=1 \
