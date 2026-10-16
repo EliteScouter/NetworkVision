@@ -121,3 +121,16 @@ def test_wan_explicit_override_wins():
 def test_wan_name_matching_avoids_lookalikes():
     st = _fw(Interface("filter_vlan"), Interface("DISPLAY"), Interface("HOME"))
     assert st.wan_interfaces() == []
+
+
+def test_no_single_precision_columns_on_mysql():
+    """MySQL FLOAT is single precision and rounds epoch timestamps to ~128 s (v0.3.0 bug)."""
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.schema import CreateTable
+
+    from app import models  # noqa: F401
+    from app.db import Base
+
+    for table in Base.metadata.sorted_tables:
+        ddl = str(CreateTable(table).compile(dialect=mysql.dialect()))
+        assert " FLOAT" not in ddl.upper(), f"{table.name} has a single-precision FLOAT column"

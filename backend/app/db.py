@@ -8,7 +8,7 @@ import random
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
-from sqlalchemy import ColumnElement, delete, event, select
+from sqlalchemy import ColumnElement, delete, event, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -70,8 +70,25 @@ async def init_db() -> None:
 
     async with engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if conn.dialect.name in ("mysql", "mariadb"):
+            await conn.run_sync(_upgrade_single_precision)
     safe = engine().url.render_as_string(hide_password=True)
     log.info("Database ready (%s)", safe)
+
+
+def _upgrade_single_precision(conn) -> None:
+    """Releases before 0.3.1 created MySQL ``FLOAT`` (single precision) columns, which
+    round epoch timestamps to ~128 s. Convert any such column to ``DOUBLE`` in place."""
+    rows = conn.execute(text(
+        "SELECT table_name, column_name FROM information_schema.columns "
+        "WHERE table_schema = DATABASE() AND data_type = 'float'")).all()
+    for table_name, column_name in rows:
+        table = Base.metadata.tables.get(table_name)
+        if table is None or column_name not in table.c:
+            continue  # not ours
+        null = "NULL" if table.c[column_name].nullable else "NOT NULL"
+        log.warning("Upgrading %s.%s from FLOAT to DOUBLE (timestamp precision fix)", table_name, column_name)
+        conn.execute(text(f"ALTER TABLE `{table_name}` MODIFY `{column_name}` DOUBLE {null}"))
 
 
 # MariaDB/Galera errors that are safe to retry: deadlock / certification failure,

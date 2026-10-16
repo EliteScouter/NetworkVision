@@ -181,3 +181,12 @@ def test_downsample_breaks_lines_across_gaps():
     out = _downsample(rows, 0, 21000, 1, 300)
     assert any(p[1] is None for p in out)  # a gap marker between the two runs
     assert out[0][1] == 1.0 and out[-1][1] == 2.0
+
+
+async def test_migrate_db_tool_copies_and_refuses_overwrite(db, tmp_path):
+    from app.tools.migrate_db import main as migrate
+
+    src = tmp_path / "networkvision.db"  # the fixture's database (has one device)
+    dst = tmp_path / "copy.db"
+    assert migrate(["--source", f"sqlite:///{src}", "--target", f"sqlite:///{dst}"]) == 0
+    assert migrate(["--source", f"sqlite:///{src}", "--target", f"sqlite:///{dst}"]) == 2  # target not empty

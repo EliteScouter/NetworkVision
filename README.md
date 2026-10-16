@@ -102,6 +102,16 @@ NV_DB_PASSWORD=...
 ```
 Tables are created automatically on first start.
 
+**Moving existing data from SQLite to MariaDB:** before switching `NV_DB_DRIVER`, copy everything (devices, credentials,
+history, logs, alerts, MFA state) with the built-in tool, run inside the container:
+
+```bash
+docker exec -e NV_DB_HOST=10.0.0.20 -e NV_DB_PASSWORD=... networkvision python -m app.tools.migrate_db
+```
+
+It creates the schema, refuses to overwrite a non-empty target, copies in small transactions and verifies row counts.
+Keep the same `NV_SECRET_KEY`, because stored credentials are encrypted with it.
+
 **MariaDB Galera clusters** are supported. NetworkVision uses `READ COMMITTED`, retries certification
 conflicts and node failovers, writes logs in small batches, and purges expired data in small chunks so
 retention never produces a giant write set. Point `NV_DB_HOST` at a single writer: your MaxScale / ProxySQL /
