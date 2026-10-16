@@ -90,3 +90,17 @@ async def test_pfsense_caches_slow_endpoints():
         await c.collect()
     assert hits["status/system"] == 3 and hits["status/interfaces"] == 3  # fresh every poll
     assert hits["firewall/rules"] == 1 and hits["status/dhcp_server/leases"] == 1  # cached
+
+
+async def test_geoip_rejected_key_is_reported(monkeypatch, tmp_path):
+    import httpx
+
+    from app.services import geoip as g
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(g.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(lambda r: httpx.Response(401)), **kw))
+    monkeypatch.setenv("NV_GEOIP_DB", str(tmp_path / "x.mmdb"))
+    gi = g.GeoIP()
+    assert await gi._download("0" * 32) is False
+    assert "HTTP 401" in gi.error and "_mmk" in gi.error
+    assert "0" * 32 not in gi.error  # never echo the key

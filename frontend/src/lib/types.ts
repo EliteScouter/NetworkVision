@@ -457,6 +457,7 @@ export interface SecuritySummary {
   totals: Record<SecCategory, number>;
   attackers: number;
   geoip: "none" | "maxmind" | "demo";
+  geoip_error?: string | null;
   timeline: SecTimelinePoint[];
   top_sources: SecSource[];
   countries: { country: string; attacks: number }[];

@@ -9,7 +9,6 @@ Without either, everything still works - countries are simply not shown.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import io
 import logging
@@ -38,6 +37,8 @@ class GeoIP:
     def __init__(self) -> None:
         self._reader = None
         self.source = "none"
+        #: Why the automatic download isn't working (shown in the UI); None when fine or not configured.
+        self.error: str | None = None
 
     @property
     def path(self) -> Path:
@@ -91,34 +92,45 @@ class GeoIP:
             return
         while True:
             age = time.time() - self.path.stat().st_mtime if self.path.exists() else None
+            ok = True
             if age is None or age > REFRESH_SECONDS:
-                with contextlib.suppress(Exception):
-                    await self._download(key)
-            await asyncio.sleep(86400)
+                try:
+                    ok = await self._download(key)
+                except Exception as e:  # noqa: BLE001 - keep the loop alive
+                    log.warning("GeoIP download failed: %s", type(e).__name__)
+                    self.error, ok = f"GeoIP download failed ({type(e).__name__}).", False
+            await asyncio.sleep(86400 if ok else 3600)  # retry hourly while broken
 
-    async def _download(self, key: str) -> None:
+    async def _download(self, key: str) -> bool:
         params = {"edition_id": "GeoLite2-Country", "license_key": key, "suffix": "tar.gz"}
         try:
             async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
                 r = await c.get(DOWNLOAD_URL, params=params)
         except httpx.HTTPError as e:
             log.warning("GeoIP download failed: %s", type(e).__name__)  # never log the URL (contains the key)
-            return
+            self.error = f"Cannot reach MaxMind ({type(e).__name__}); retrying hourly."
+            return False
         if r.status_code != 200:
             log.warning("GeoIP download failed: HTTP %s (check NV_GEOIP_LICENSE_KEY)", r.status_code)
-            return
+            self.error = (f"MaxMind rejected NV_GEOIP_LICENSE_KEY (HTTP {r.status_code}). Use a license key from "
+                          "Account › Manage License Keys: 40 characters, ending in _mmk."
+                          if r.status_code in (401, 403) else f"GeoIP download failed (HTTP {r.status_code}); retrying hourly.")
+            return False
         with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
             member = next((m for m in tar.getmembers() if m.isfile() and m.name.endswith(".mmdb")), None)
             if member is None:
                 log.warning("GeoIP archive did not contain a .mmdb file")
-                return
+                self.error = "The MaxMind download did not contain a .mmdb file."
+                return False
             data = tar.extractfile(member).read()  # type: ignore[union-attr]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_bytes(data)
         os.replace(tmp, self.path)
         log.info("GeoIP database updated")
+        self.error = None
         self.open()
+        return True
 
 
 geoip = GeoIP()

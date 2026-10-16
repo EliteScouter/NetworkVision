@@ -110,7 +110,7 @@ async def security_summary(range_: str = Query("24h", alias="range"), db: AsyncS
 
     detections = sorted((a for a in engine.open.values() if a.rule.startswith("sec_")), key=lambda a: -a.last_seen_at)
     return {
-        "range": range_, "totals": totals, "attackers": attackers, "geoip": geoip.source,
+        "range": range_, "totals": totals, "attackers": attackers, "geoip": geoip.source, "geoip_error": geoip.error,
         "timeline": await _timeline(db, since, span),
         "top_sources": sources[:25],
         "countries": sorted(({"country": c, "attacks": n} for c, n in countries.items()), key=lambda x: -x["attacks"])[:20],

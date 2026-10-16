@@ -390,9 +390,14 @@ export default function SecurityPage() {
         {data?.geoip === "none" ? (
           <div className="space-y-2 py-6 text-center text-sm text-dim">
             <Globe2 size={28} className="mx-auto text-faint" />
-            <div>GeoIP is not configured.</div>
-            <div className="text-xs text-faint">Set <code className="text-violet">NV_GEOIP_LICENSE_KEY</code> (free MaxMind account) or drop
-              GeoLite2-Country.mmdb into the data volume.</div>
+            {data.geoip_error ? <>
+              <div className="text-warn">GeoIP download is failing.</div>
+              <div className="text-xs text-faint">{data.geoip_error}</div>
+            </> : <>
+              <div>GeoIP is not configured.</div>
+              <div className="text-xs text-faint">Set <code className="text-violet">NV_GEOIP_LICENSE_KEY</code> (free MaxMind account) or drop
+                GeoLite2-Country.mmdb into the data volume.</div>
+            </>}
           </div>
         ) : (
           <div className="max-h-[400px] space-y-2.5 overflow-y-auto pr-1">
