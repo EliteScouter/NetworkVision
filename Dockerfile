@@ -9,7 +9,9 @@ RUN npm run build
 
 # ---------- 2. Python runtime ----------
 FROM python:3.13-slim AS runtime
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ARG NV_VERSION=""
+ENV NV_VERSION=${NV_VERSION} \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NV_DATA_DIR=/data \
