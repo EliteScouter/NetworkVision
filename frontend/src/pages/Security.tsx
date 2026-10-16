@@ -22,7 +22,8 @@ import { AreaChart, type Series } from "../components/charts";
 import { Badge, CountUp, Drawer, Empty, Kv, Panel, Segmented, Spinner } from "../components/ui";
 import { ago, clock, SEV_NAMES, sevColor } from "../lib/format";
 import { api } from "../lib/api";
-import { useApi, useTick } from "../lib/hooks";
+import { useApi, useLocalState, useTick } from "../lib/hooks";
+import { SlideList } from "../components/SlideList";
 import { useLive } from "../lib/store";
 import type { IpReport, SecCategory, SecEvent, SecTimelinePoint, SecuritySummary } from "../lib/types";
 
@@ -70,6 +71,9 @@ export function firewallLink(chips: { field: string; value: string }[], range: R
   const fwRange = range === "30d" ? "7d" : range; // the firewall explorer keeps at most 7 days
   return `/firewall?range=${fwRange}&f=${encodeURIComponent(JSON.stringify({ chips, q: "", hideNoise: false }))}`;
 }
+
+/** Live feed update cadence ("Live" = every second). */
+const FEED_REFRESH: [string, string][] = [["1", "Live"], ["5", "5s"], ["10", "10s"], ["30", "30s"], ["60", "1m"]];
 
 /** Stable identity for a feed event (no list index: that remounts every row on each new event). */
 const eventKey = (e: SecEvent) => `${e.ts}|${e.category}|${e.src}|${e.dport ?? ""}|${e.service}|${e.user}`;
@@ -240,10 +244,8 @@ function IpDrawer({ ip, onClose }: { ip: string | null; onClose: () => void }) {
 function FeedRow({ e, onPick }: { e: SecEvent; onPick: (ip: string) => void }) {
   const c = CAT[e.category];
   return (
-    // New rows open from zero height at the top, so older rows glide down instead of jumping.
-    <motion.button initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 29 }}
-      transition={{ duration: 0.35, ease: [0.2, 0.7, 0.2, 1] }} onClick={() => onPick(e.src)}
-      className="flex w-full items-center gap-2.5 overflow-hidden rounded-lg px-2 text-left font-mono text-[11.5px] hover:bg-white/[0.03]">
+    <button onClick={() => onPick(e.src)}
+      className="flex h-full w-full items-center gap-2.5 overflow-hidden rounded-lg px-2 text-left font-mono text-[11.5px] hover:bg-white/[0.03]">
       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: c.color, boxShadow: `0 0 8px ${c.color}` }} />
       <span className="w-14 shrink-0 text-faint">{clock(e.ts)}</span>
       <span className="w-5 shrink-0">{e.internal ? "🏠" : flag(e.country)}</span>
@@ -252,7 +254,7 @@ function FeedRow({ e, onPick }: { e: SecEvent; onPick: (ip: string) => void }) {
         {e.category === "block" ? `✕ ${e.service}${e.dport ? ` :${e.dport}` : ""}` : e.category === "ids" ? e.service
           : `${c.label} · ${e.service}${e.user ? ` (${e.user})` : ""}`}
       </span>
-    </motion.button>
+    </button>
   );
 }
 
@@ -264,6 +266,7 @@ export default function SecurityPage() {
   const [events, setEvents] = useState<EventsSpec | null>(null);
   const [countryFilter, setCountryFilter] = useState<string | null>(null);
   const [feedCats, setFeedCats] = useState<SecCategory[]>(["block", "auth_fail", "auth_ok", "ids"]);
+  const [feedEvery, setFeedEvery] = useLocalState<string>("sec-feed-refresh", "1");
   const nav = useNavigate();
   useTick(10000);
 
@@ -456,15 +459,19 @@ export default function SecurityPage() {
       </Panel>
 
       <Panel className="col-span-12 xl:col-span-4" title="Live feed" icon={<ScrollText size={15} />} bodyClass="relative min-h-[340px]"
-        actions={<div className="flex gap-1">{(["block", "auth_fail", "ids"] as SecCategory[]).map((c) => (
+        actions={<div className="flex items-center gap-1">
+          <select value={feedEvery} onChange={(e) => setFeedEvery(e.target.value)} title="Feed refresh"
+            className="chip cursor-pointer !px-1.5 !py-0.5 !text-[10.5px] outline-none">
+            {FEED_REFRESH.map(([value, label]) => <option key={value} value={value} className="bg-panel">{label}</option>)}
+          </select>
+          {(["block", "auth_fail", "ids"] as SecCategory[]).map((c) => (
           <button key={c} className="chip !px-2 !py-0.5 !text-[10.5px]" data-active={feedCats.includes(c)}
             onClick={() => setFeedCats(feedCats.includes(c) ? feedCats.filter((x) => x !== c) : [...feedCats, c])}>
             {{ block: "Block", auth_fail: "Auth", ids: "IDS" }[c as "block" | "auth_fail" | "ids"]}</button>))}</div>}>
         <div className="absolute inset-0 overflow-hidden px-4 pb-4 [mask-image:linear-gradient(to_bottom,black_85%,transparent)]">
           {!feed.length && <div className="py-10 text-center text-xs text-faint">Waiting for events…</div>}
-          <AnimatePresence initial={false}>
-            {feed.map((e) => <FeedRow key={eventKey(e)} e={e} onPick={setPick} />)}
-          </AnimatePresence>
+          <SlideList items={feed} keyOf={eventKey} rowHeight={29} max={60} every={Number(feedEvery) || 1}
+            resetKey={feedCats.join()} render={(e) => <FeedRow e={e} onPick={setPick} />} />
         </div>
       </Panel>
 

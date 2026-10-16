@@ -19,6 +19,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
+import { SlideList } from "../components/SlideList";
 import { AreaChart, Gauge, Sparkline } from "../components/charts";
 import { DeviceIcon } from "../components/DeviceIcon";
 import { TopologyGraph } from "../components/TopologyGraph";
@@ -27,7 +28,7 @@ import { ago, bps, bpsParts, clock, deviceColor, fmtUptime, ms, SEV_NAMES, sevCo
 import { useHistory } from "../components/HistoryExplorer";
 import { useApi, useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
-import type { Overview, ServicesResponse, SpeedStatus, Topology } from "../lib/types";
+import type { LogItem, Overview, ServicesResponse, SpeedStatus, Topology } from "../lib/types";
 
 function Kpi({ icon: Icon, label, children, sub, tone = "#22d3ee", delay = 0, to }: {
   icon: LucideIcon;
@@ -89,6 +90,8 @@ function Bps({ v }: { v: number }) {
     </span>
   );
 }
+
+const logKey = (l: LogItem) => l._k ?? `${l.ts}-${l.host}-${l.message.slice(0, 40)}`;
 
 export default function OverviewPage() {
   const { data: ov } = useApi<Overview>("/overview", 5000);
@@ -301,19 +304,15 @@ export default function OverviewPage() {
         actions={<Link to="/logs" className="flex items-center gap-1 text-xs text-dim hover:text-cyan">Open log explorer <ChevronRight size={14} /></Link>}>
         <div className="h-56 overflow-hidden font-mono text-[12px] leading-6 [mask-image:linear-gradient(to_bottom,black_70%,transparent)]">
           {logs.length === 0 && <div className="py-8 text-center text-faint">Listening for syslog and device events…</div>}
-          <AnimatePresence initial={false}>
-            {logs.slice(0, 18).map((l) => (
-              <motion.div key={l._k ?? `${l.ts}-${l.host}-${l.message.slice(0, 40)}`} layout initial={{ opacity: 0, x: -12, backgroundColor: "rgba(34,211,238,0.12)" }}
-                animate={{ opacity: 1, x: 0, backgroundColor: "rgba(34,211,238,0)" }} transition={{ duration: 0.6 }}
-                className="flex gap-3 truncate rounded px-1">
+          <SlideList items={logs} keyOf={logKey} rowHeight={24} max={14} every={1} render={(l) => (
+              <div className="flex gap-3 truncate rounded px-1">
                 <span className="shrink-0 text-faint">{clock(l.ts)}</span>
                 <span className={clsx("w-14 shrink-0", sevColor(l.severity))}>{SEV_NAMES[l.severity]}</span>
                 <span className="w-32 shrink-0 truncate text-cyan/80">{l.device ?? devices[l.device_id ?? -1]?.name ?? l.host}</span>
                 <span className="w-24 shrink-0 truncate text-violet/80">{l.app}</span>
                 <span className="truncate text-ink/85">{l.message}</span>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+              </div>
+            )} />
         </div>
       </Panel>
     </div>
