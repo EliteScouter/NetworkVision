@@ -90,3 +90,35 @@ def test_new_feature_endpoints(client):
     assert st["engine"] == "demo" and st["settings"]["interval_min"] == 60
     r = client.put("/api/speedtest/settings", json={"interval_min": 240, "expected_down_mbps": 2000})
     assert r.json()["settings"]["interval_min"] == 240
+
+
+def test_settings_tuning_and_maintenance_api(client):
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"}).status_code == 200
+    s = client.get("/api/settings").json()
+    assert s["fields"]["alert_cpu_pct"]["source"] == "default" and "high_cpu" in s["rules"]
+    assert client.post("/api/settings/test-notification").status_code == 400  # nothing configured
+    r = client.put("/api/settings", json={"values": {"alert_cpu_pct": 75, "notify_ntfy_url": "https://ntfy.example/secret-topic"}})
+    assert r.status_code == 200 and "secret-topic" not in r.text
+    assert r.json()["fields"]["alert_cpu_pct"] == {"value": 75, "default": 90, "source": "ui", "secret": False}
+    assert r.json()["channels"] == ["ntfy"]
+    assert client.put("/api/settings", json={"values": {"retention_days_logs": 0}}).status_code == 422
+    client.put("/api/settings", json={"values": {"alert_cpu_pct": None, "notify_ntfy_url": None}})
+
+    dev = client.get("/api/devices").json()["devices"][0]["id"]
+    t = client.put(f"/api/alert-tuning/{dev}", json={"muted_interfaces": ["eth9"], "thresholds": {"cpu": 99}}).json()
+    assert t["muted_interfaces"] == ["eth9"] and t["thresholds"] == {"cpu": 99}
+    assert client.put(f"/api/alert-tuning/{dev}", json={"disabled_rules": ["nope"]}).status_code == 422
+    assert client.get("/api/alert-tuning/999999").status_code == 404
+
+    now = time.time()
+    w = client.post("/api/maintenance", json={"name": "fw upgrade", "kind": "once", "starts_at": now - 5, "ends_at": now + 300})
+    assert w.status_code == 201 and w.json()["active"]
+    rec = client.post("/api/maintenance", json={"kind": "weekly", "start_time": "03:00", "duration_min": 30,
+                                                "weekdays": [6], "tz": "America/New_York", "device_id": dev})
+    assert rec.status_code == 201 and rec.json()["next_start"]
+    assert client.post("/api/maintenance", json={"kind": "weekly", "start_time": "25:00", "weekdays": [1]}).status_code == 422
+    assert [x["id"] for x in client.get("/api/maintenance/active").json()["items"]] == [w.json()["id"]]
+    for x in (w, rec):
+        assert client.delete(f"/api/maintenance/{x.json()['id']}").status_code == 204
+    assert client.get("/api/maintenance").json()["items"] == []
+    client.put(f"/api/alert-tuning/{dev}", json={})

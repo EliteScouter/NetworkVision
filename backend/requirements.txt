@@ -14,3 +14,4 @@ cryptography==50.0.2
 pyotp==2.10.0
 segno==1.6.6
 pykeepass==4.2.0
+tzdata==2026.5

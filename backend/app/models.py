@@ -145,6 +145,8 @@ class Alert(Base):
     acknowledged_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     acknowledged_by: Mapped[str] = mapped_column(String(64), default="")
     count: Mapped[int] = mapped_column(Integer, default=1)
+    # Opened during a maintenance window: kept for the record, but never notified or counted in health.
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
 class Setting(Base):
@@ -155,6 +157,44 @@ class Setting(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[float] = mapped_column(Float, default=now, onupdate=now)
+
+
+class AlertTuning(Base):
+    """Per-device alert tuning: mute, disabled rules, muted interfaces, threshold overrides."""
+
+    __tablename__ = "alert_tuning"
+
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True)
+    muted: Mapped[bool] = mapped_column(Boolean, default=False)
+    disabled_rules: Mapped[list] = mapped_column(JSON, default=list)
+    muted_interfaces: Mapped[list] = mapped_column(JSON, default=list)
+    thresholds: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[float] = mapped_column(Float, default=now, onupdate=now)
+
+
+class MaintenanceWindow(Base):
+    """A period during which alerts are recorded as suppressed instead of notified.
+
+    kind=once uses starts_at/ends_at (epoch). kind=daily|weekly repeats at start_time
+    (HH:MM, in ``tz``) for duration_min minutes; weekly only on ``weekdays`` (0=Mon).
+    device_id NULL means every device; a device's window also covers its children.
+    """
+
+    __tablename__ = "maintenance_windows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="once")
+    starts_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ends_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_time: Mapped[str] = mapped_column(String(5), default="00:00")
+    duration_min: Mapped[int] = mapped_column(Integer, default=60)
+    weekdays: Mapped[list] = mapped_column(JSON, default=list)
+    tz: Mapped[str] = mapped_column(String(64), default="UTC")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[float] = mapped_column(Float, default=now)
 
 
 # --------------------------------------------------------------------------- #

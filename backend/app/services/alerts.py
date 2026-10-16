@@ -3,6 +3,11 @@
 After every poll the device's live state is evaluated against built-in rules.
 Threshold rules must hold for NV_ALERT_CONSECUTIVE polls before opening (no
 flapping alerts), and every alert auto-resolves once its condition clears.
+
+Thresholds come from services.runtime (UI settings over env), optionally overridden
+per device. Disabled rules, muted devices and muted interfaces produce no
+conditions at all; during a maintenance window conditions still open alerts, but
+flagged ``suppressed``: recorded, never notified, not counted in device health.
 """
 
 from __future__ import annotations
@@ -14,11 +19,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ..config import get_settings
 from ..db import sessionmaker
 from ..models import Alert
 from . import notifier
 from .bus import bus
+from .runtime import runtime
 from .state import DeviceState, store
 
 log = logging.getLogger("networkvision.alerts")
@@ -32,6 +37,8 @@ class Condition:
     title: str
     detail: str = ""
     debounce: bool = True  # require N consecutive hits
+    subject: str = ""  # interface name, for per-interface muting
+    suppressed: bool = False  # inside a maintenance window
 
 
 def alert_dict(a: Alert) -> dict[str, Any]:
@@ -41,15 +48,27 @@ def alert_dict(a: Alert) -> dict[str, Any]:
         "rule": a.rule, "severity": a.severity, "title": a.title, "detail": a.detail,
         "started_at": a.started_at, "last_seen_at": a.last_seen_at, "resolved_at": a.resolved_at,
         "acknowledged_at": a.acknowledged_at, "acknowledged_by": a.acknowledged_by, "count": a.count,
+        "suppressed": bool(a.suppressed),
     }
 
 
-def evaluate(dev: DeviceState) -> list[Condition]:
-    s = get_settings()
+def evaluate(dev: DeviceState, now: float | None = None) -> list[Condition]:
+    if not dev.enabled or runtime.device_muted(dev.id):
+        return []
+    out = [c for c in _conditions(dev) if runtime.rule_enabled(c.rule, dev.id)
+           and not (c.subject and runtime.interface_muted(dev.id, c.subject))]
+    if out and runtime.in_maintenance(dev.id, dev.parent_id, now):
+        for c in out:
+            c.suppressed = True
+    return out
+
+
+def _conditions(dev: DeviceState) -> list[Condition]:
+    def th(name: str) -> float:
+        return runtime.threshold(name, dev.id)
+
     out: list[Condition] = []
     p = f"{dev.id}"
-    if not dev.enabled:
-        return out
     if dev.status == "down":
         via = "reported offline by its controller" if dev.parent_id else "unreachable"
         out.append(Condition(f"down:{p}", "device_down", "critical", f"{dev.name} is {via}", dev.error or ""))
@@ -58,16 +77,16 @@ def evaluate(dev: DeviceState) -> list[Condition]:
         out.append(Condition(f"poll:{p}", "poll_error", "warning", f"{dev.name}: integration error", dev.error))
 
     m = dev.metrics
-    if (cpu := m.get("cpu")) is not None and cpu >= s.alert_cpu_pct:
+    if (cpu := m.get("cpu")) is not None and cpu >= th("alert_cpu_pct"):
         out.append(Condition(f"cpu:{p}", "high_cpu", "warning", f"High CPU on {dev.name}", f"CPU at {cpu:.0f}%"))
-    if (mem := m.get("mem")) is not None and mem >= s.alert_mem_pct:
+    if (mem := m.get("mem")) is not None and mem >= th("alert_mem_pct"):
         out.append(Condition(f"mem:{p}", "high_mem", "warning", f"High memory on {dev.name}", f"Memory at {mem:.0f}%"))
-    if (temp := m.get("temp")) is not None and temp >= s.alert_temp_c:
-        out.append(Condition(f"temp:{p}", "high_temp", "critical" if temp >= s.alert_temp_c + 10 else "warning",
+    if (temp := m.get("temp")) is not None and temp >= th("alert_temp_c"):
+        out.append(Condition(f"temp:{p}", "high_temp", "critical" if temp >= th("alert_temp_c") + 10 else "warning",
                              f"{dev.name} running hot", f"Temperature {temp:.0f} °C"))
-    if (lat := m.get("latency_ms")) is not None and lat >= s.alert_latency_ms:
+    if (lat := m.get("latency_ms")) is not None and lat >= th("alert_latency_ms"):
         out.append(Condition(f"lat:{p}", "high_latency", "warning", f"High latency to {dev.name}", f"{lat:.0f} ms"))
-    if (loss := m.get("loss_pct")) is not None and loss >= s.alert_loss_pct and dev.status != "down":
+    if (loss := m.get("loss_pct")) is not None and loss >= th("alert_loss_pct") and dev.status != "down":
         out.append(Condition(f"loss:{p}", "packet_loss", "warning", f"Packet loss to {dev.name}", f"{loss:.0f}% loss"))
 
     for gw in dev.gateways:
@@ -76,10 +95,10 @@ def evaluate(dev: DeviceState) -> list[Condition]:
             out.append(Condition(f"gwdown:{gk}", "gateway_down", "critical", f"Gateway {gw.name} down on {dev.name}",
                                  gw.detail or gw.address))
         else:
-            if gw.loss_pct is not None and gw.loss_pct >= s.alert_loss_pct:
+            if gw.loss_pct is not None and gw.loss_pct >= th("alert_loss_pct"):
                 out.append(Condition(f"gwloss:{gk}", "gateway_loss", "warning", f"Gateway {gw.name} packet loss",
                                      f"{gw.loss_pct:.0f}% loss on {dev.name}"))
-            if gw.latency_ms is not None and gw.latency_ms >= s.alert_latency_ms:
+            if gw.latency_ms is not None and gw.latency_ms >= th("alert_latency_ms"):
                 out.append(Condition(f"gwlat:{gk}", "gateway_latency", "warning", f"Gateway {gw.name} high latency",
                                      f"{gw.latency_ms:.0f} ms on {dev.name}"))
 
@@ -88,16 +107,16 @@ def evaluate(dev: DeviceState) -> list[Condition]:
         label = f"{i.name}" + (f" ({i.alias})" if i.alias else "")
         if i.flaps() >= 4:
             out.append(Condition(f"flap:{ik}", "port_flapping", "warning", f"Port flapping: {label} on {dev.name}",
-                                 f"{i.flaps()} link changes in 10 min", debounce=False))
+                                 f"{i.flaps()} link changes in 10 min", debounce=False, subject=i.name))
         elif i.ever_up and i.oper_up is False and i.admin_up is not False:
             out.append(Condition(f"ifdown:{ik}", "port_down", "warning", f"Link down: {label} on {dev.name}",
-                                 "Interface was up and went down"))
-        if i.errors_per_min >= s.alert_if_errors_per_min:
+                                 "Interface was up and went down", subject=i.name))
+        if i.errors_per_min >= th("alert_if_errors_per_min"):
             out.append(Condition(f"iferr:{ik}", "port_errors", "warning", f"Errors on {label} ({dev.name})",
-                                 f"{i.errors_per_min:.0f} errors/min - check cabling/SFP"))
-        if i.util_pct is not None and i.util_pct >= s.alert_if_util_pct:
+                                 f"{i.errors_per_min:.0f} errors/min - check cabling/SFP", subject=i.name))
+        if i.util_pct is not None and i.util_pct >= th("alert_if_util_pct"):
             out.append(Condition(f"ifutil:{ik}", "port_saturated", "warning", f"{label} saturated on {dev.name}",
-                                 f"{i.util_pct:.0f}% of {i.speed_mbps:.0f} Mbps"))
+                                 f"{i.util_pct:.0f}% of {i.speed_mbps:.0f} Mbps", subject=i.name))
 
     if dev.facts.get("upgradable") or dev.facts.get("updates_available"):
         to = dev.facts.get("upgrade_to") or ""
@@ -124,6 +143,8 @@ class AlertEngine:
             d.alert_counts, d.health = {}, "ok"
         rank = {"ok": 0, "info": 1, "warning": 2, "critical": 3}
         for a in self.open.values():
+            if a.suppressed:
+                continue
             d = store.get(a.device_id) if a.device_id else None
             if d:
                 d.alert_counts[a.severity] = d.alert_counts.get(a.severity, 0) + 1
@@ -132,7 +153,7 @@ class AlertEngine:
 
     async def process(self, dev: DeviceState) -> None:
         conds = {c.key: c for c in evaluate(dev)}
-        need = get_settings().alert_consecutive
+        need = int(runtime.get("alert_consecutive"))
         # Rates need two samples: don't resolve alerts restored from the DB until the device is warmed up.
         self._evals[dev.id] = self._evals.get(dev.id, 0) + 1
         warm = self._evals[dev.id] > 2
@@ -153,10 +174,14 @@ class AlertEngine:
                     existing.last_seen_at, existing.detail = now, c.detail
                     if existing.severity != c.severity:
                         existing.severity = c.severity
+                    if existing.suppressed and not c.suppressed:
+                        # Maintenance is over and the problem is still there: now it is real.
+                        existing.suppressed = False
+                        opened.append(existing)
                     await db.merge(existing)
                 elif not c.debounce or self._hits[key] >= need:
                     a = Alert(key=key, device_id=dev.id, rule=c.rule, severity=c.severity, title=c.title,
-                              detail=c.detail, started_at=now, last_seen_at=now)
+                              detail=c.detail, started_at=now, last_seen_at=now, suppressed=c.suppressed)
                     db.add(a)
                     opened.append(a)
             for key in prefix_keys - set(conds):
@@ -174,7 +199,11 @@ class AlertEngine:
     async def raise_event(self, device_id: int | None, key: str, title: str, detail: str,
                           severity: str = "critical", ttl: float = 1800, rule: str = "log_event") -> None:
         """Stateless alerts (e.g. from a critical syslog line) that auto-expire after `ttl` seconds."""
+        if not runtime.rule_enabled(rule, device_id) or runtime.device_muted(device_id):
+            return
         now = time.time()
+        dev = store.get(device_id) if device_id else None
+        suppressed = runtime.in_maintenance(device_id, dev.parent_id if dev else None, now) is not None
         self._event_expiry[key] = now + ttl
         async with sessionmaker()() as db:
             if key in self.open:
@@ -185,7 +214,7 @@ class AlertEngine:
                 await db.commit()
                 return
             a = Alert(key=key, device_id=device_id, rule=rule, severity=severity, title=title, detail=detail,
-                      started_at=now, last_seen_at=now)
+                      started_at=now, last_seen_at=now, suppressed=suppressed)
             db.add(a)
             await db.commit()
         self.open[key] = a
@@ -246,17 +275,24 @@ class AlertEngine:
             self.open.pop(k, None)
         self._recount()
 
+    @staticmethod
+    def _quiet(a: Alert) -> bool:
+        """Recorded but not pushed: maintenance, or tuning changed since the alert opened."""
+        return bool(a.suppressed) or runtime.device_muted(a.device_id) or not runtime.rule_enabled(a.rule, a.device_id)
+
     def _announce(self, opened: list[Alert], resolved: list[Alert]) -> None:
         for a in opened:
             d = alert_dict(a)
-            log.info("ALERT %s: %s", a.severity.upper(), a.title)
+            log.info("ALERT %s%s: %s", a.severity.upper(), " (suppressed: maintenance)" if a.suppressed else "", a.title)
             bus.publish({"type": "alert", "event": "opened", "alert": d})
-            notifier.fire(d)
+            if not self._quiet(a):
+                notifier.fire(d)
         for a in resolved:
             d = alert_dict(a)
             log.info("RESOLVED: %s", a.title)
             bus.publish({"type": "alert", "event": "resolved", "alert": d})
-            notifier.fire(d, resolved=True)
+            if not self._quiet(a):
+                notifier.fire(d, resolved=True)
 
 
 engine = AlertEngine()

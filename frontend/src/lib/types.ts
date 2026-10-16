@@ -109,6 +109,8 @@ export interface Alert {
   acknowledged_at: number | null;
   acknowledged_by: string;
   count: number;
+  /** Opened during a maintenance window: recorded, not notified. */
+  suppressed?: boolean;
 }
 
 export interface LogItem {
@@ -220,6 +222,51 @@ export interface Meta {
   collectors: string[];
   retention: { metrics_days: number; logs_days: number };
   thresholds: Record<string, number>;
+  maintenance?: MaintenanceWindow[];
+}
+
+// ----------------------------------------------------------------- settings
+export interface SettingField {
+  value: string | number;
+  /** The env var (or built-in) value that applies when the UI value is reset. */
+  default: string | number;
+  source: "default" | "env" | "ui";
+  secret: boolean;
+}
+
+export interface SettingsData {
+  fields: Record<string, SettingField>;
+  disabled_rules: string[];
+  rules: Record<string, string>;
+  channels: string[];
+  secrets_corrupt: boolean;
+}
+
+export interface AlertTuning {
+  device_id: number;
+  muted: boolean;
+  disabled_rules: string[];
+  muted_interfaces: string[];
+  thresholds: Record<string, number>;
+}
+
+export interface MaintenanceWindow {
+  id: number;
+  name: string;
+  device_id: number | null;
+  kind: "once" | "daily" | "weekly";
+  starts_at: number | null;
+  ends_at: number | null;
+  start_time: string;
+  duration_min: number;
+  weekdays: number[];
+  tz: string;
+  enabled: boolean;
+  created_by: string;
+  created_at: number;
+  active: boolean;
+  active_until: number | null;
+  next_start: number | null;
 }
 
 // ------------------------------------------------------------------ history
