@@ -33,13 +33,15 @@ async def overview() -> dict[str, Any]:
     wan_rx = wan_tx = 0.0
     gws = []
     wan_history: list = []
+    busiest = -1.0
     for d in edge:
-        for i in d.interfaces.values():
-            if "wan" in i.name.lower() or "wan" in i.alias.lower():
-                wan_rx += i.rx_bps or 0
-                wan_tx += i.tx_bps or 0
-                if len(i.history) > len(wan_history):  # chart the busiest-history WAN (primary edge)
-                    wan_history = [list(p) for p in i.history]
+        for i in d.wan_interfaces():
+            wan_rx += i.rx_bps or 0
+            wan_tx += i.tx_bps or 0
+            # Chart the WAN that carries the most traffic (the real internet edge, not a lab firewall).
+            volume = sum((p[1] or 0) + (p[2] or 0) for p in i.history)
+            if len(i.history) >= 2 and volume > busiest:
+                busiest, wan_history = volume, [list(p) for p in i.history]
         gws += [{"device": d.name, "name": g.name, "up": g.up, "latency_ms": g.latency_ms, "loss_pct": g.loss_pct,
                  "address": g.address} for g in d.gateways]
     controllers = [d for d in devs if d.role == "controller"]

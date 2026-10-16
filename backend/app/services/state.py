@@ -7,6 +7,7 @@ hitting the database.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
@@ -15,6 +16,8 @@ from typing import Any
 from ..collectors.base import Gateway, Interface, Neighbor, Section, Snapshot
 
 HISTORY_POINTS = 120  # ~30 min at a 15 s poll interval
+# "wan"/"internet" anywhere; short words only when not part of a longer word (so "fiLTEr" doesn't match "lte").
+WAN_NAME = re.compile(r"wan|internet|(?<![a-z])(isp|uplink|fib(er|re)|cable|dsl|starlink|lte|5g)(?![a-z])", re.I)
 
 
 @dataclass
@@ -80,7 +83,23 @@ class DeviceState:
     tx_bps: float = 0.0
     alert_counts: dict[str, int] = field(default_factory=dict)
     history: deque = field(default_factory=lambda: deque(maxlen=HISTORY_POINTS))
+    wan_override: list[str] = field(default_factory=list)  # from the device's "WAN interface(s)" setting
     _counters: dict[str, tuple[float, Interface]] = field(default_factory=dict)
+
+    def wan_interfaces(self) -> list[IfState]:
+        """The internet-facing interfaces of a firewall/router.
+
+        People rename WAN all the time ("INTERNET", "FIBER", "ISP1"), so in order:
+        explicit setting > interfaces that carry a gateway (pfSense) > common names.
+        """
+        ifs = list(self.interfaces.values())
+        if self.wan_override:
+            wanted = {w.strip().lower() for w in self.wan_override if w.strip()}
+            return [i for i in ifs if i.name.lower() in wanted or (i.alias and i.alias.lower() in wanted)]
+        with_gw = [i for i in ifs if i.extra.get("gateway") and i.media not in ("virtual", "tunnel")]
+        if with_gw:
+            return with_gw
+        return [i for i in ifs if WAN_NAME.search(i.name) or (i.alias and WAN_NAME.search(i.alias))]
 
     # -- serialization --------------------------------------------------------
     def summary(self) -> dict[str, Any]:
@@ -214,6 +233,8 @@ class StateStore:
         st.name, st.kind, st.role, st.host = device.name, device.kind, device.role, device.host
         st.parent_id, st.enabled = device.parent_id, device.enabled
         st.tags, st.location = list(device.tags or []), device.location or ""
+        wan = (device.config or {}).get("wan_interfaces") or []
+        st.wan_override = [w.strip() for w in (wan.split(",") if isinstance(wan, str) else wan) if str(w).strip()]
         if not device.enabled:
             st.status = "disabled"
         return st

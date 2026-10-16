@@ -100,12 +100,14 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
     has_internet = False
     for d in devices:
         if d.role in ("firewall", "router") and d.parent_id is None and d.gateways:
-            wan = next((i for i in d.interfaces.values() if "wan" in i.name.lower() or "wan" in i.alias.lower()), None)
+            wans = d.wan_interfaces()
+            wan = max(wans, key=lambda i: (i.rx_bps or 0) + (i.tx_bps or 0), default=None)
             if wan is None:
                 wan = next((i for i in d.interfaces.values() if i.is_uplink), None)
-            # Lab firewalls behind another firewall are not internet edges.
+            # Lab firewalls whose WAN port is cabled to another known device are not internet edges.
+            wan_names = {w.name.lower() for w in wans} | {w.alias.lower() for w in wans if w.alias}
             behind = any(e for e in edges.values() if str(d.id) in (e["source"], e["target"]) and e["kind"] != "wan"
-                         and _is_edge_fw(e, d.id))
+                         and _is_edge_fw(e, d.id, wan_names))
             if not behind:
                 has_internet = True
                 add(d.id, wan.name if wan else "", INTERNET_ID, "", "wan")
@@ -137,7 +139,7 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
     return {"nodes": nodes, "edges": list(edges.values())}
 
 
-def _is_edge_fw(edge: dict[str, Any], dev_id: int) -> bool:
+def _is_edge_fw(edge: dict[str, Any], dev_id: int, wan_names: set[str]) -> bool:
     """True if this firewall's WAN port is cabled to another known device (i.e. it is an inner/lab firewall)."""
-    port = edge["source_port"] if edge["source"] == str(dev_id) else edge["target_port"]
-    return "wan" in (port or "").lower()
+    port = ((edge["source_port"] if edge["source"] == str(dev_id) else edge["target_port"]) or "").lower()
+    return bool(port) and (port in wan_names or "wan" in port)

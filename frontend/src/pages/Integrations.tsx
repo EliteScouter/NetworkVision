@@ -42,6 +42,7 @@ interface FormState {
   notes: string;
   ping: boolean;
   syslog_aliases: string;
+  wan_interfaces: string;
   values: Record<string, unknown>;
 }
 
@@ -87,6 +88,7 @@ function DeviceForm({ integrations, roles, initial, onSaved, onBack, keepassOn }
     const config: Record<string, unknown> = { ping: f.ping };
     const secrets: Record<string, unknown> = {};
     if (f.syslog_aliases.trim()) config.syslog_aliases = f.syslog_aliases.split(",").map((s) => s.trim()).filter(Boolean);
+    if (f.wan_interfaces.trim()) config.wan_interfaces = f.wan_interfaces.split(",").map((s) => s.trim()).filter(Boolean);
     spec?.fields.forEach((fs) => {
       const v = f.values[fs.key];
       if (v === undefined) return;
@@ -154,6 +156,11 @@ function DeviceForm({ integrations, roles, initial, onSaved, onBack, keepassOn }
         <Field label="Tags" help="Comma separated"><input className="input" value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} placeholder="core, rack" /></Field>
         <Field label="Location"><input className="input" value={f.location} onChange={(e) => setF({ ...f, location: e.target.value })} placeholder="Rack / Office / Garage" /></Field>
         <Field label="Syslog aliases" help="Extra hostnames/IPs this device sends syslog from"><input className="input font-mono" value={f.syslog_aliases} onChange={(e) => setF({ ...f, syslog_aliases: e.target.value })} /></Field>
+        {(f.role === "firewall" || f.role === "router") && (
+          <Field label="WAN interface(s)" help="Leave blank to auto-detect (gateway / names like WAN, INTERNET, ISP). Comma separated.">
+            <input className="input font-mono" value={f.wan_interfaces} placeholder="auto" onChange={(e) => setF({ ...f, wan_interfaces: e.target.value })} />
+          </Field>
+        )}
         <div className="flex flex-col justify-end gap-3 pb-1">
           <Toggle checked={f.ping} onChange={(v) => setF({ ...f, ping: v })} label="Also ping for latency / loss" />
           <Toggle checked={f.enabled} onChange={(v) => setF({ ...f, enabled: v })} label="Enabled" />
@@ -215,7 +222,7 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
     const spec = info?.integrations.find((i) => i.kind === kind);
     return {
       kind, name: "", host: "", role: spec?.default_role ?? "other", enabled: true, poll_interval: "", tags: "", location: "", notes: "",
-      ping: true, syslog_aliases: "",
+      ping: true, syslog_aliases: "", wan_interfaces: "",
       values: Object.fromEntries((spec?.fields ?? []).filter((f) => f.default != null).map((f) => [f.key, f.default])),
     };
   };
@@ -229,7 +236,8 @@ export default function IntegrationsPage({ meta }: { meta: Meta | null }) {
         id: d.id, kind: d.kind, name: d.name, host: d.host, role: d.role, enabled: d.enabled,
         poll_interval: d.poll_interval ? String(d.poll_interval) : "", tags: d.tags.join(", "), location: d.location, notes: d.notes ?? "",
         ping: cfg.ping !== false, syslog_aliases: ((cfg.syslog_aliases as string[]) ?? []).join(", "),
-        values: { ...Object.fromEntries(Object.entries(cfg).filter(([k]) => !["ping", "syslog_aliases", "name_locked"].includes(k))), ...d.secrets },
+        wan_interfaces: ((cfg.wan_interfaces as string[]) ?? []).join(", "),
+        values: { ...Object.fromEntries(Object.entries(cfg).filter(([k]) => !["ping", "syslog_aliases", "name_locked", "wan_interfaces"].includes(k))), ...d.secrets },
       },
     });
   };

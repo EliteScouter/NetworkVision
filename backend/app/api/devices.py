@@ -28,7 +28,7 @@ from ..services.state import store
 router = APIRouter(prefix="/api", tags=["devices"], dependencies=[Depends(require_user)])
 
 ROLES = ["firewall", "router", "switch", "ap", "controller", "server", "nas", "hypervisor", "iot", "other"]
-EXTRA_CONFIG = {"ping", "syslog_aliases", "name_locked"}
+EXTRA_CONFIG = {"ping", "syslog_aliases", "name_locked", "wan_interfaces"}
 
 
 class DeviceIn(BaseModel):

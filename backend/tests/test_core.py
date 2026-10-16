@@ -93,3 +93,31 @@ def test_alert_rules():
     st.mark_down("boom")
     conds = evaluate(st)
     assert [c.rule for c in conds] == ["device_down"]
+
+
+# --------------------------------------------------------------- WAN detection
+def _fw(*ifaces: Interface) -> DeviceState:
+    st = DeviceState(id=9, name="fw", kind="pfsense", role="firewall", host="x")
+    st.apply(Snapshot(interfaces=list(ifaces)))
+    return st
+
+
+def test_wan_detected_by_renamed_interface():
+    st = _fw(Interface("INTERNET"), Interface("INFRASTRUCTURE"), Interface("DMZ"), Interface("PUBLIC"))
+    assert [i.name for i in st.wan_interfaces()] == ["INTERNET"]
+
+
+def test_wan_prefers_interfaces_with_a_gateway():
+    st = _fw(Interface("ISP_BACKUP"), Interface("PRIMARY", extra={"gateway": "203.0.113.1"}), Interface("LAN"))
+    assert [i.name for i in st.wan_interfaces()] == ["PRIMARY"]
+
+
+def test_wan_explicit_override_wins():
+    st = _fw(Interface("WAN"), Interface("OPT7"))
+    st.wan_override = ["opt7"]
+    assert [i.name for i in st.wan_interfaces()] == ["OPT7"]
+
+
+def test_wan_name_matching_avoids_lookalikes():
+    st = _fw(Interface("filter_vlan"), Interface("DISPLAY"), Interface("HOME"))
+    assert st.wan_interfaces() == []
