@@ -66,7 +66,7 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
         key = tuple(sorted([str(a), str(b)]))
         existing = edges.get(key)
         rank = {"manual": 4, "lldp": 3, "uplink": 3, "learned": 3, "description": 2, "wan": 1}
-        if existing and rank.get(existing["kind"], 0) > rank.get(kind, 0):
+        if existing and rank.get(existing["kind"], 0) >= rank.get(kind, 0):
             # keep stronger source but fill in missing ports
             if str(a) == existing["source"]:
                 existing["source_port"] = existing["source_port"] or a_port
@@ -101,13 +101,37 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
     # firewalls and servers that don't speak LLDP (pfSense, Proxmox, NAS...).
     from .clients import tracker  # local import: clients -> state, never back to topology
 
+    by_id_all = {d.id: d for d in devices}
+    trunks: set[tuple[int, str]] = set()  # (switch id, port name) that lead to another switch
+    for e in edges.values():
+        ends = [(e["source"], e["source_port"]), (e["target"], e["target_port"])]
+        devs_ = [by_id_all.get(int(x)) if x.isdigit() else None for x, _ in ends]
+        if all(devs_) and all(d.role in ("switch", "router", "firewall") for d in devs_):
+            for d, (_, port) in zip(devs_, ends, strict=True):
+                iface = _find_port(d, port)
+                if iface is not None:
+                    trunks.add((d.id, iface.name))
+
+    learned: dict[tuple[int, int], list[str]] = {}
     for c in tracker.merged():
         if not c.get("wired") or not c.get("uplink_mac"):
             continue
         switch = by_mac.get(norm_mac(c["uplink_mac"]))
         dev = by_mac.get(c["mac"]) or (by_ip.get(c["ip"]) if c.get("ip") else None)
-        if switch is not None and dev is not None and switch != dev:
-            add(switch, f"Port {c['sw_port']}" if c.get("sw_port") else "", dev, "", "learned")
+        if switch is None or dev is None or switch == dev:
+            continue
+        port = f"Port {c['sw_port']}" if c.get("sw_port") else ""
+        sw = by_id_all.get(switch)
+        iface = _find_port(sw, port) if sw and port else None
+        # A MAC "seen" on an uplink to another switch is behind that switch, not plugged in here.
+        if iface is not None and (switch, iface.name) in trunks:
+            continue
+        ports = learned.setdefault((switch, dev), [])
+        if port and port not in ports:
+            ports.append(port)
+    for (switch, dev), ports in learned.items():
+        ports.sort(key=lambda x: int(x.split()[-1]) if x.split()[-1].isdigit() else 0)
+        add(switch, ", ".join(ports), dev, "", "learned")
 
     for link in manual_links:
         add(link.a_device_id, link.a_port, link.b_device_id, link.b_port, "manual", link.label, link.id)

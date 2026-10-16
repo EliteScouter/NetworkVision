@@ -194,7 +194,7 @@ async def test_migrate_db_tool_copies_and_refuses_overwrite(db, tmp_path):
 
 def test_topology_matches_real_homelab_layout():
     """VLAN interface names aren't cables; MAC learning links pfSense; only public-gateway firewalls face the internet."""
-    from app.collectors.base import Gateway, Interface, Snapshot
+    from app.collectors.base import Gateway, Interface, Neighbor, Snapshot
     from app.services import topology
     from app.services.clients import from_unifi
     from app.services.state import DeviceState, store
@@ -211,7 +211,15 @@ def test_topology_matches_real_homelab_layout():
     xg = DeviceState(id=4, name="US XG 16", kind="unifi", role="switch", host="10.10.20.3", parent_id=9)
     xg.facts["mac"] = "78:8a:20:f9:1e:93"
     ctl = DeviceState(id=9, name="EliteUNIFI", kind="unifi", role="controller", host="10.10.20.2")
-    ctl.clients = [from_unifi({"mac": "aa:aa:aa:00:00:01", "is_wired": True, "sw_mac": "78:8a:20:f9:1e:93", "sw_port": 9}, True, {})]
+    xg.apply(Snapshot(interfaces=[Interface("Port 7", alias="24PoE-CABIN-SW"), Interface("Port 9", alias="FW-LAN"),
+                                  Interface("Port 10", alias="FW-WAN")],
+                      neighbors=[]))
+    pc.neighbors = [Neighbor("B2", "US-16-XG", "24PoE-CABIN-SW", remote_mac="78:8a:20:f9:1e:93")]
+    ctl.facts["mac"] = "cc:cc:cc:00:00:09"
+    ctl.clients = [from_unifi({"mac": "aa:aa:aa:00:00:01", "is_wired": True, "sw_mac": "78:8a:20:f9:1e:93", "sw_port": 9}, True, {}),
+                   from_unifi({"mac": "aa:aa:aa:00:00:02", "is_wired": True, "sw_mac": "78:8a:20:f9:1e:93", "sw_port": 10}, True, {}),
+                   # the controller itself sits behind the ProCurve: UniFi sees it on the trunk port 7
+                   from_unifi({"mac": "cc:cc:cc:00:00:09", "is_wired": True, "sw_mac": "78:8a:20:f9:1e:93", "sw_port": 7}, True, {})]
     store.devices.update({1: pf, 2: opn, 3: pc, 4: xg, 9: ctl})
     try:
         t = topology.build([], {})
@@ -220,7 +228,10 @@ def test_topology_matches_real_homelab_layout():
         flat = {tuple(sorted((names[e["source"]], names[e["target"]]))): e for e in t["edges"]}
         assert ("HP-ProCurve-NET", "OPN-Sense") not in flat  # VLAN200 "OPNSENSE" is not a cable
         learned = flat[("PFSense", "US XG 16")]
-        assert learned["kind"] == "learned" and "Port 9" in (learned["source_port"], learned["target_port"])
+        assert learned["kind"] == "learned" and "Port 9, Port 10" in (learned["source_port"], learned["target_port"])
+        assert ("EliteUNIFI", "US XG 16") not in flat  # seen on a trunk port -> not plugged in here
+        lldp = flat[("HP-ProCurve-NET", "US XG 16")]
+        assert lldp["kind"] == "lldp"  # LLDP kept over MAC learning
         assert ("Internet", "PFSense") in flat and ("Internet", "OPN-Sense") not in flat
         assert topology.internet_edge_ids(list(store.devices.values())) == {1}
         assert pairs  # built something
