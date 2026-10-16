@@ -90,3 +90,40 @@ def test_new_feature_endpoints(client):
     assert st["engine"] == "demo" and st["settings"]["interval_min"] == 60
     r = client.put("/api/speedtest/settings", json={"interval_min": 240, "expected_down_mbps": 2000})
     assert r.json()["settings"]["interval_min"] == 240
+
+
+def test_services_endpoints(client):
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"}).status_code == 200
+    listing = client.get("/api/services").json()
+    assert listing["summary"]["total"] >= 6 and {s["kind"] for s in listing["services"]} == {"http", "tcp", "dns", "tls"}
+    assert len(listing["services"][0]["bars"]) == 90 and set(listing["services"][0]["uptime"]) == {"24h", "7d", "30d", "90d"}
+
+    for bad in ({"name": "x", "kind": "http", "target": "file:///etc/passwd"},
+                {"name": "x", "kind": "tcp", "target": "example.com"},  # no port
+                {"name": "x", "kind": "http", "target": "https://example.com", "interval_s": 5},
+                {"name": "x", "kind": "http", "target": "https://example.com", "interval_s": 10, "timeout_s": 10}):
+        assert client.post("/api/services", json=bad).status_code == 422, bad
+
+    body = {"name": "Jellyfin", "kind": "http", "target": "https://media.example.org/health",
+            "config": {"keyword": "Healthy", "slow_ms": 800}}
+    r = client.post("/api/services/test", json=body)
+    assert r.status_code == 200 and "ok" in r.json()
+    r = client.post("/api/services", json=body)
+    assert r.status_code == 201, r.text
+    created = r.json()
+    sid = created["id"]
+    assert created["config"]["keyword"] == "Healthy" and created["config"]["fail_threshold"] == 3
+    checked = client.post(f"/api/services/{sid}/check").json()
+    assert checked["state"]["last_ts"] is not None and checked["state"]["status"] != "pending"
+    detail = client.get(f"/api/services/{sid}").json()
+    assert detail["name"] == "Jellyfin" and isinstance(detail["incidents"], list)
+    h = client.get("/api/history/service", params={"service_id": sid, "range": "24h"})
+    assert h.status_code == 200 and h.json()["samples"] >= 1
+
+    body.update(enabled=False, name="Jellyfin (paused)")
+    upd = client.put(f"/api/services/{sid}", json=body).json()
+    assert upd["name"] == "Jellyfin (paused)" and upd["state"]["status"] == "paused"
+    assert client.get("/api/services/incidents", params={"service_id": sid}).json()["items"] == []
+    assert client.delete(f"/api/services/{sid}").status_code == 204
+    assert client.get(f"/api/services/{sid}").status_code == 404
+    assert client.put("/api/services/99999", json=body).status_code == 404

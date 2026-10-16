@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy import select
 
 from ..config import get_settings
-from ..db import sessionmaker
+from ..db import sessionmaker, with_retry
 from ..models import Alert
 from . import notifier
 from .bus import bus
@@ -191,6 +191,47 @@ class AlertEngine:
         self.open[key] = a
         self._recount()
         self._announce([a], [])
+
+    async def sync_external(self, prefix: str, conds: list[Condition], refresh_s: float = 300) -> None:
+        """Open/update/resolve the alerts a non-device monitor owns (keys starting with ``prefix``).
+
+        The caller does its own debouncing; every condition passed in is treated as confirmed.
+        ``last_seen_at`` is only re-written every ``refresh_s`` so a long outage isn't a write per check.
+        """
+        now = time.time()
+        want = {c.key: c for c in conds if c.key.startswith(prefix)}
+        changed: list[Alert] = []
+        new: list[Condition] = []
+        for key, c in want.items():
+            a = self.open.get(key)
+            if a is None:
+                new.append(c)
+            elif a.detail != c.detail or a.severity != c.severity or now - a.last_seen_at >= refresh_s:
+                a.last_seen_at, a.detail, a.severity = now, c.detail, c.severity
+                changed.append(a)
+        gone = [a for k, a in self.open.items() if k.startswith(prefix) and k not in want]
+        if not (new or changed or gone):
+            return
+        for a in gone:
+            a.resolved_at = now
+
+        async def _write(db) -> list[Alert]:
+            for a in changed + gone:
+                await db.merge(a)
+            rows = [Alert(key=c.key, device_id=None, rule=c.rule, severity=c.severity, title=c.title, detail=c.detail,
+                          started_at=now, last_seen_at=now) for c in new]
+            db.add_all(rows)
+            await db.commit()
+            return rows
+
+        opened = await with_retry(_write)
+        for a in gone:
+            self.open.pop(a.key, None)
+        for a in opened:
+            self.open[a.key] = a
+        if opened or gone:
+            self._recount()
+            self._announce(opened, gone)
 
     async def expire_events(self) -> None:
         now = time.time()

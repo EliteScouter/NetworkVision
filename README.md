@@ -22,6 +22,7 @@ something goes wrong. It ships as a single Docker container that drops straight 
 - **WiFi dashboard**: per-AP radio health with airtime rings (your traffic vs. interference), channel and width, TX power, retries, SSIDs, band/standard/signal mix, clients needing attention, and a **channel map** of your radios against every neighbouring network.
 - **History explorer**: click any chart for 1h to 1y or a custom range, drag to zoom, peaks overlay, min/avg/max/p95, data moved, and CSV export. Hourly rollups keep long ranges fast.
 - **Speed test**: built-in (Cloudflare's speed-test network, no binary). Download, upload, latency, jitter and **bufferbloat** (latency under load). Scheduled (hourly by default) or on demand, with history and a "slower than expected" alert.
+- **Services (uptime)**: watch the things you host: HTTP(S) (status codes, keyword, redirects), TCP ports, DNS answers and TLS certificates (days left, issuer, name match). Status-page style 90-day uptime bars, 24h/7d/30d/90d uptime, response-time sparklines and history, an incident log, and alerts for down, slow, expiring (<21 / <7 days) and invalid certificates.
 - **Log explorer**: a built-in syslog receiver (UDP + TCP, RFC 3164/5424) plus logs pulled from device APIs. You get a severity histogram, full-text search with `-exclusions`, filters, and live tail.
 - **Alerts**: device down, gateway down/loss/latency, high CPU/mem/temp, link down, port flapping, port errors, saturation, critical syslog, and firmware updates. Alerts are debounced and auto-resolve. You can ack or resolve them, and route them to Discord, Slack, ntfy, or any webhook.
 - **Fast filtering everywhere**, plus a `Ctrl+K` command palette.
@@ -115,6 +116,28 @@ HAProxy endpoint, or one fixed node. That avoids multi-master write conflicts en
 - **HP ProCurve**: `snmp-server community "<community>" restricted` and `lldp run` (on by default). Use the SNMP integration.
 - **TP-Link managed (JetStream/Omada)**: enable SNMP. Use the SNMP integration.
 - **TP-Link Easy Smart (TL-SG108E)**: no SNMP exists, so use the *Easy Smart* integration (read-only scraping). These switches allow only one web session at a time.
+
+### Services (uptime monitoring)
+
+*Services* checks your self-hosted sites and ports on their own interval (default 60 s) and records every result, so the
+history explorer and uptime figures work like every other chart. A service is only marked **down** after *N*
+consecutive failures (default 3), which opens an incident and a critical alert; the next success closes both.
+
+| Check | What it verifies |
+|---|---|
+| HTTP(S) | Status code in range (`200-399`, `204`, `2xx,401`...), optional keyword in the body, response time; redirects optional. HTTPS certificates are read hourly for expiry alerts. |
+| TCP | The port accepts a connection (SSH, Plex, game servers, SMTP...). |
+| DNS | The name resolves (system resolver), and optionally *only* to the addresses you expect - catches a stale or hijacked record. |
+| TLS cert | Handshake, chain validity, the certificate covers the name (SAN), days until expiry. Works for any TLS port (443, 465, 993, 8443...). |
+
+Only `http://` / `https://` URLs and plain hostnames/IPs are accepted as targets.
+
+**Check from outside, too.** These checks run from the NetworkVision host, i.e. from *inside* your network. That is
+great for "is the app up and is its certificate valid", but it cannot see what visitors see: NAT reflection or split DNS
+can make a service look healthy internally while the port-forward is broken, and an ISP outage takes NetworkVision
+offline along with everything else. Pair it with a free external probe (Uptime Kuma on a cheap VPS, UptimeRobot,
+Healthchecks.io, or Better Stack) pointed at the same public URLs, and point the DNS check at your public hostname with
+your WAN IP as the expected address.
 
 **Topology tip:** if a switch port description names a device (e.g. `Proxmox-01`), NetworkVision draws the link automatically.
 

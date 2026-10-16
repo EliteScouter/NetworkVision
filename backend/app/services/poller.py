@@ -30,6 +30,9 @@ from ..models import (
     LogEntry,
     RadioMetric,
     RadioMetricHourly,
+    ServiceCheck,
+    ServiceCheckHourly,
+    ServiceIncident,
 )
 from ..security import SecretError, decrypt_secrets, resolve_secret
 from . import history
@@ -401,9 +404,12 @@ class Poller:
                     "interface metrics": await delete_in_chunks(InterfaceMetric, InterfaceMetric.ts < metrics_cutoff),
                     "gateway metrics": await delete_in_chunks(GatewayMetric, GatewayMetric.ts < metrics_cutoff),
                     "radio metrics": await delete_in_chunks(RadioMetric, RadioMetric.ts < metrics_cutoff),
+                    "service checks": await delete_in_chunks(ServiceCheck, ServiceCheck.ts < metrics_cutoff),
                     **{f"hourly {m.__tablename__}": await delete_in_chunks(m, m.ts < rollup_cutoff) for m in (
-                        DeviceMetricHourly, InterfaceMetricHourly, GatewayMetricHourly, RadioMetricHourly)},
+                        DeviceMetricHourly, InterfaceMetricHourly, GatewayMetricHourly, RadioMetricHourly, ServiceCheckHourly)},
                     "logs": await delete_in_chunks(LogEntry, LogEntry.ts < now - s.retention_days_logs * 86400),
+                    "service incidents": await delete_in_chunks(ServiceIncident, ServiceIncident.ended_at.is_not(None)
+                                                                & (ServiceIncident.ended_at < now - s.retention_days_alerts * 86400)),
                     "alerts": await delete_in_chunks(Alert, Alert.resolved_at.is_not(None)
                                                      & (Alert.resolved_at < now - s.retention_days_alerts * 86400)),
                 }

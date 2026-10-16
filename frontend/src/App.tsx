@@ -13,6 +13,7 @@ import IntegrationsPage from "./pages/Integrations";
 import LoginPage from "./pages/Login";
 import LogsPage from "./pages/Logs";
 import OverviewPage from "./pages/Overview";
+import ServicesPage from "./pages/Services";
 import SpeedtestPage from "./pages/Speedtest";
 import TopologyPage from "./pages/Topology";
 import WifiPage from "./pages/Wifi";
@@ -36,6 +37,7 @@ function Authed({ me }: { me: Me }) {
         <Route path="/devices/:id" element={<DeviceDetailPage />} />
         <Route path="/clients" element={<ClientsPage />} />
         <Route path="/wifi" element={<WifiPage />} />
+        <Route path="/services" element={<ServicesPage />} />
         <Route path="/speedtest" element={<SpeedtestPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
