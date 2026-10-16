@@ -41,7 +41,13 @@ def _find_port(dev: DeviceState, port: str) -> IfState | None:
     return None
 
 
-def build(manual_links: list[Link], positions: dict[int, tuple[float | None, float | None]]) -> dict[str, Any]:
+def build(manual_links: list[Link], positions: dict[int, tuple[float | None, float | None]],
+          internet_links: dict[int, dict[str, str]] | None = None) -> dict[str, Any]:
+    """``internet_links`` are user-declared device -> Internet links ({device_id: {"port", "label"}}).
+
+    They only shape the map; WAN throughput totals still come from the detected edge firewalls,
+    so a lab firewall routed through the main one is never counted twice.
+    """
     devices = [d for d in store.devices.values() if d.enabled]
     by_mac: dict[str, int] = {}
     by_name: dict[str, int] = {}
@@ -137,6 +143,15 @@ def build(manual_links: list[Link], positions: dict[int, tuple[float | None, flo
         add(link.a_device_id, link.a_port, link.b_device_id, link.b_port, "manual", link.label, link.id)
 
     has_internet = False
+    present = {d.id: d for d in devices}
+    for dev_id, link in (internet_links or {}).items():
+        d = present.get(dev_id)
+        if d is None:
+            continue
+        wan = max(d.wan_interfaces(), key=lambda i: (i.rx_bps or 0) + (i.tx_bps or 0), default=None)
+        add(d.id, link.get("port") or (wan.name if wan else ""), INTERNET_ID, "", "manual", link.get("label", ""))
+        edges[tuple(sorted([str(d.id), INTERNET_ID]))]["internet_link"] = d.id
+        has_internet = True
     edge_ids = internet_edge_ids(devices)
     for d in devices:
         if d.id in edge_ids:

@@ -191,3 +191,23 @@ def test_security_events_drilldown(client):
     one = client.get("/api/security/events", params={"category": ["block"], "src": items[0]["src"], "range": "1h"}).json()["items"]
     assert one and all(i["src"] == items[0]["src"] for i in one)
     assert client.get("/api/security/events", params={"category": ["nope"]}).status_code == 422
+
+
+def test_manual_internet_link(client):
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"}).status_code == 200
+    devs = client.get("/api/devices").json()["devices"]
+    sw = next(d for d in devs if d["role"] == "switch")
+
+    def inet_edge():
+        edges = client.get("/api/topology").json()["edges"]
+        return next((e for e in edges if {e["source"], e["target"]} == {str(sw["id"]), "internet"}), None)
+
+    assert inet_edge() is None
+    r = client.post("/api/links", json={"a_device_id": sw["id"], "a_port": "Port 1", "b_device_id": "internet", "label": "lab"})
+    assert r.status_code == 201
+    e = inet_edge()
+    assert e and e["kind"] == "manual" and e["internet_link"] == sw["id"] and e["label"] == "lab"
+    assert client.post("/api/links", json={"a_device_id": 999999, "b_device_id": "internet"}).status_code == 404
+    assert client.delete(f"/api/links/internet/{sw['id']}").status_code == 204
+    assert inet_edge() is None
+    assert client.delete(f"/api/links/internet/{sw['id']}").status_code == 404

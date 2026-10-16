@@ -20,7 +20,8 @@ function AddLink({ nodes, onDone }: { nodes: TopoNode[]; onDone: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const save = async () => {
     try {
-      await api("/links", { method: "POST", body: { ...f, a_device_id: +f.a_device_id, b_device_id: +f.b_device_id } });
+      await api("/links", { method: "POST", body: { ...f, a_device_id: +f.a_device_id,
+        b_device_id: f.b_device_id === "internet" ? "internet" : +f.b_device_id } });
       onDone();
     } catch (e) {
       setErr((e as Error).message);
@@ -30,7 +31,8 @@ function AddLink({ nodes, onDone }: { nodes: TopoNode[]; onDone: () => void }) {
     <div className="space-y-4">
       <p className="text-sm text-dim">
         Most links are discovered automatically (LLDP, UniFi uplinks, port descriptions that name a device). Add a manual link for
-        anything that can't be discovered — unmanaged switches, VMs on a hypervisor bridge, etc.
+        anything that can't be discovered — unmanaged switches, VMs on a hypervisor bridge, etc. Pick “Internet” as device B
+        for a router or firewall that reaches the internet but isn't detected as an edge (map only — WAN totals are unchanged).
       </p>
       {(["a", "b"] as const).map((s) => (
         <div key={s} className="grid grid-cols-2 gap-3">
@@ -38,6 +40,7 @@ function AddLink({ nodes, onDone }: { nodes: TopoNode[]; onDone: () => void }) {
             <select className="input" value={f[`${s}_device_id`]} onChange={(e) => setF({ ...f, [`${s}_device_id`]: e.target.value })}>
               <option value="">Select…</option>
               {devs.map((d) => <option key={d.id} value={d.device_id!}>{d.name}</option>)}
+              {s === "b" && <option value="internet">🌐 Internet</option>}
             </select>
           </Field>
           <Field label="Port (optional)">
@@ -150,9 +153,12 @@ export default function TopologyPage() {
                           <span className="text-magenta">↑ {bps(e.tx_bps)}</span>
                           <span className="text-dim">{pct(e.util_pct)}</span>
                         </div>
-                        {e.link_id != null && (
+                        {(e.link_id != null || e.internet_link != null) && (
                           <button className="mt-2 flex items-center gap-1 text-crit/80 hover:text-crit"
-                            onClick={async () => { await api(`/links/${e.link_id}`, { method: "DELETE" }); reload(); }}>
+                            onClick={async () => {
+                              await api(e.internet_link != null ? `/links/internet/${e.internet_link}` : `/links/${e.link_id}`, { method: "DELETE" });
+                              reload();
+                            }}>
                             <Trash2 size={12} /> remove manual link
                           </button>
                         )}

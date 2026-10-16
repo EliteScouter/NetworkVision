@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -11,7 +12,7 @@ from sqlalchemy import Integer, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..models import Alert, Device, Link, LogEntry
+from ..models import Alert, Device, Link, LogEntry, Setting
 from ..security import require_user
 from ..services import topology
 from ..services.alerts import alert_dict, engine
@@ -76,10 +77,13 @@ async def overview() -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------- topology
+INTERNET_LINKS_KEY = "topology_internet_links"
+
+
 class LinkIn(BaseModel):
     a_device_id: int
     a_port: str = ""
-    b_device_id: int
+    b_device_id: int | Literal["internet"]
     b_port: str = ""
     label: str = Field(default="", max_length=128)
 
@@ -88,11 +92,36 @@ class LinkIn(BaseModel):
 async def get_topology(db: AsyncSession = Depends(get_session)) -> dict:
     links = (await db.execute(select(Link))).scalars().all()
     pos = {d.id: (d.pos_x, d.pos_y) for d in (await db.execute(select(Device))).scalars().all()}
-    return topology.build(list(links), pos)
+    return topology.build(list(links), pos, await _internet_links(db))
+
+
+async def _internet_links(db: AsyncSession) -> dict[int, dict[str, str]]:
+    row = await db.get(Setting, INTERNET_LINKS_KEY)
+    try:
+        return {int(k): v for k, v in json.loads(row.value).items()} if row and row.value else {}
+    except (ValueError, AttributeError):
+        return {}
+
+
+async def _save_internet_links(db: AsyncSession, links: dict[int, dict[str, str]]) -> None:
+    row = await db.get(Setting, INTERNET_LINKS_KEY)
+    value = json.dumps({str(k): v for k, v in links.items()})
+    if row is None:
+        db.add(Setting(key=INTERNET_LINKS_KEY, value=value))
+    else:
+        row.value = value
+    await db.commit()
 
 
 @router.post("/links", status_code=201)
 async def create_link(body: LinkIn, db: AsyncSession = Depends(get_session)) -> dict:
+    if body.b_device_id == "internet":  # the Internet node isn't a device: kept as a small setting
+        if await db.get(Device, body.a_device_id) is None:
+            raise HTTPException(404, f"Device {body.a_device_id} not found")
+        links = await _internet_links(db)
+        links[body.a_device_id] = {"port": body.a_port, "label": body.label}
+        await _save_internet_links(db, links)
+        return {"id": None, "internet_link": body.a_device_id}
     if body.a_device_id == body.b_device_id:
         raise HTTPException(422, "A link needs two different devices")
     for did in (body.a_device_id, body.b_device_id):
@@ -102,6 +131,14 @@ async def create_link(body: LinkIn, db: AsyncSession = Depends(get_session)) -> 
     db.add(link)
     await db.commit()
     return {"id": link.id}
+
+
+@router.delete("/links/internet/{device_id}", status_code=204)
+async def delete_internet_link(device_id: int, db: AsyncSession = Depends(get_session)) -> None:
+    links = await _internet_links(db)
+    if links.pop(device_id, None) is None:
+        raise HTTPException(404, "Link not found")
+    await _save_internet_links(db, links)
 
 
 @router.delete("/links/{link_id}", status_code=204)

@@ -171,6 +171,8 @@ export interface TopoEdge {
   kind: "lldp" | "uplink" | "manual" | "description" | "wan";
   label: string;
   link_id: number | null;
+  /** Set on a user-declared device -> Internet link (the device id). */
+  internet_link?: number | null;
   speed_mbps?: number | null;
   rx_bps?: number | null;
   tx_bps?: number | null;
