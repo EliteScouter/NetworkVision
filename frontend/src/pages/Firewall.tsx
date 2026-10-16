@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Badge, CountUp, Empty, Panel, Segmented, Spinner, Toggle } from "../components/ui";
 import { api } from "../lib/api";
@@ -77,6 +77,8 @@ interface View { chips: Chip[]; q: string; hideNoise: boolean }
 interface SavedView extends View { name: string }
 
 // ---------------------------------------------------------------- helpers
+/** Live-refresh choices for the event list ("Live" polls every 3 s). */
+const REFRESH: [string, string][] = [["3", "Live"], ["5", "5s"], ["10", "10s"], ["30", "30s"], ["60", "1m"]];
 const RANGES = { "15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800 } as const;
 type Range = keyof typeof RANGES;
 const FIELDS: Field[] = ["action", "iface", "rule", "proto", "src", "dst", "ip", "port", "sport", "direction", "ipver"];
@@ -276,6 +278,8 @@ export default function FirewallPage() {
   const [text, setText] = useState(view.q);
   const [devIds, setDevIds] = useState<number[]>([]);
   const [paused, setPaused] = useState(false);
+  const [every, setEvery] = useLocalState<string>("fw-refresh", "3");
+  const secs = Number(every) || 3;
   const [saved, setSaved] = useLocalState<SavedView[]>("fw-views", []);
   const [items, setItems] = useState<FwEvent[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -287,6 +291,9 @@ export default function FirewallPage() {
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [facets, setFacets] = useState<FacetsResponse | null>(null);
   const fresh = useRef<Set<number>>(new Set());
+  const scroller = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLTableSectionElement>(null);
+  const topId = useRef<number | null>(null);
   const live = !paused && !win;
 
   // Debounced free text.
@@ -363,10 +370,26 @@ export default function FirewallPage() {
   useEffect(() => { setOpen(null); loadFirst(false); loadAggs(); }, [loadFirst, loadAggs]);
   useEffect(() => {
     if (!live) return;
-    const a = window.setInterval(() => document.visibilityState === "visible" && loadFirst(true), 3000);
-    const b = window.setInterval(() => document.visibilityState === "visible" && loadAggs(), 15000);
+    const a = window.setInterval(() => document.visibilityState === "visible" && loadFirst(true), secs * 1000);
+    const b = window.setInterval(() => document.visibilityState === "visible" && loadAggs(), Math.max(15, secs) * 1000);
     return () => { window.clearInterval(a); window.clearInterval(b); };
-  }, [live, loadFirst, loadAggs]);
+  }, [live, secs, loadFirst, loadAggs]);
+
+  // New rows land on top: slide the whole list down by their height so older rows are pushed
+  // toward the bottom. If the reader has scrolled down, keep what they're looking at in place.
+  useLayoutEffect(() => {
+    const prev = topId.current;
+    topId.current = items[0]?.id ?? null;
+    const tb = body.current, sc = scroller.current;
+    if (prev == null || !tb || !sc || !fresh.current.size || items[0]?.id === prev) return;
+    const anchor = tb.querySelector<HTMLElement>(`tr[data-id="${prev}"]`);
+    if (!anchor) return;
+    const shift = anchor.offsetTop - (tb.firstElementChild as HTMLElement).offsetTop;
+    if (shift <= 0) return;
+    if (sc.scrollTop > 8) { sc.scrollTop += shift; return; }
+    tb.animate([{ transform: `translateY(${-shift}px)` }, { transform: "translateY(0)" }],
+      { duration: Math.min(700, 250 + shift), easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" });
+  }, [items]);
   useEffect(() => {
     const load = () => api<FacetsResponse>("/firewall/facets").then(setFacets).catch(() => undefined);
     load();
@@ -463,6 +486,8 @@ export default function FirewallPage() {
           <Toggle checked={view.hideNoise} onChange={(v) => setView({ ...view, hideNoise: v })} label="hide multicast noise" />
           <Segmented value={win ? ("" as Range) : range} onChange={(r) => { setRange(r); setWin(null); setZoomStack([]); }}
             options={(Object.keys(RANGES) as Range[]).map((r) => ({ value: r, label: r }))} />
+          <Segmented value={every} onChange={setEvery}
+            options={REFRESH.map(([v, label]) => ({ value: v, label }))} />
           <button className={clsx("btn", live && "!border-ok/50 !text-ok")} onClick={() => { if (win) { setWin(null); setZoomStack([]); setPaused(false); } else setPaused(!paused); }}>
             {live ? <><span className="relative flex h-2 w-2"><span className="absolute inset-0 animate-ping rounded-full bg-ok/70" /><span className="relative h-2 w-2 rounded-full bg-ok" /></span> Live</>
               : win ? <><Play size={14} /> Back to live</> : <><Pause size={14} /> Paused</>}
@@ -513,7 +538,7 @@ export default function FirewallPage() {
 
       <div className="grid gap-4 2xl:grid-cols-[1fr_380px]">
         {/* --------------------------------------------------- table */}
-        <div className="panel min-w-0 overflow-hidden !p-0">
+        <div className="panel flex min-w-0 flex-col overflow-hidden !p-0">
           <div className="flex items-center justify-between gap-3 border-b border-edge px-4 py-2.5">
             <div className="flex items-center gap-2">
               <BrickWall size={15} className="text-cyan" />
@@ -523,7 +548,8 @@ export default function FirewallPage() {
             {loading && <Spinner size={14} />}
           </div>
           {error && <div className="m-3 rounded-lg border border-crit/40 bg-crit/10 px-3 py-2 text-sm text-crit">{error}</div>}
-          <div className="max-h-[calc(100vh-17rem)] min-h-[360px] overflow-auto">
+          <div className="relative min-h-[calc(100vh-17rem)] flex-1">
+          <div ref={scroller} className="absolute inset-0 overflow-auto">
             <table className="table-hud min-w-[980px] font-mono !text-[12px]">
               <thead>
                 <tr>
@@ -531,7 +557,7 @@ export default function FirewallPage() {
                   <th>Source</th><th>Destination</th><th>Proto</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody ref={body}>
                 {items.map((e) => {
                   const isOpen = open === e.id;
                   const isNew = fresh.current.has(e.id);
@@ -557,6 +583,7 @@ export default function FirewallPage() {
                   : <span className="text-xs text-faint">— end of range —</span>}
               </div>
             )}
+          </div>
           </div>
         </div>
 
@@ -622,8 +649,8 @@ function FwRow({ e, isOpen, isNew, bad, onToggle, pick, devName }: {
   const svc = e.dst_port != null ? SERVICES[e.dst_port] : undefined;
   return (
     <>
-      <motion.tr onClick={onToggle} initial={isNew ? { backgroundColor: "rgba(34,211,238,0.18)" } : false}
-        animate={{ backgroundColor: isOpen ? "rgba(34,211,238,0.06)" : "rgba(0,0,0,0)" }} transition={{ duration: 1.6 }}
+      <motion.tr data-id={e.id} onClick={onToggle} initial={isNew ? { opacity: 0 } : false}
+        animate={{ opacity: 1, backgroundColor: isOpen ? "rgba(34,211,238,0.06)" : "rgba(0,0,0,0)" }} transition={{ duration: 0.5 }}
         className={clsx("cursor-pointer", e.noise && "opacity-60")} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 34px" }}>
         <td className="!py-1.5"><Tok onPick={(neg) => pick("action", e.action, neg)} title={e.action}><ActionIcon action={e.action} /></Tok></td>
         <td className="!py-1.5 whitespace-nowrap text-dim">

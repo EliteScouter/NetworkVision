@@ -240,9 +240,10 @@ function IpDrawer({ ip, onClose }: { ip: string | null; onClose: () => void }) {
 function FeedRow({ e, onPick }: { e: SecEvent; onPick: (ip: string) => void }) {
   const c = CAT[e.category];
   return (
-    <motion.button layout initial={{ opacity: 0, x: -14, backgroundColor: `${c.color}22` }} animate={{ opacity: 1, x: 0, backgroundColor: "#00000000" }}
-      transition={{ duration: 0.5 }} onClick={() => onPick(e.src)}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left font-mono text-[11.5px] hover:bg-white/[0.03]">
+    // New rows open from zero height at the top, so older rows glide down instead of jumping.
+    <motion.button initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 29 }}
+      transition={{ duration: 0.35, ease: [0.2, 0.7, 0.2, 1] }} onClick={() => onPick(e.src)}
+      className="flex w-full items-center gap-2.5 overflow-hidden rounded-lg px-2 text-left font-mono text-[11.5px] hover:bg-white/[0.03]">
       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: c.color, boxShadow: `0 0 8px ${c.color}` }} />
       <span className="w-14 shrink-0 text-faint">{clock(e.ts)}</span>
       <span className="w-5 shrink-0">{e.internal ? "🏠" : flag(e.country)}</span>
@@ -449,12 +450,12 @@ export default function SecurityPage() {
         </div>
       </Panel>
 
-      <Panel className="col-span-12 xl:col-span-4" title="Live feed" icon={<ScrollText size={15} />}
+      <Panel className="col-span-12 xl:col-span-4" title="Live feed" icon={<ScrollText size={15} />} bodyClass="relative min-h-[340px]"
         actions={<div className="flex gap-1">{(["block", "auth_fail", "ids"] as SecCategory[]).map((c) => (
           <button key={c} className="chip !px-2 !py-0.5 !text-[10.5px]" data-active={feedCats.includes(c)}
             onClick={() => setFeedCats(feedCats.includes(c) ? feedCats.filter((x) => x !== c) : [...feedCats, c])}>
             {{ block: "Block", auth_fail: "Auth", ids: "IDS" }[c as "block" | "auth_fail" | "ids"]}</button>))}</div>}>
-        <div className="h-[340px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_80%,transparent)]">
+        <div className="absolute inset-0 overflow-hidden px-4 pb-4 [mask-image:linear-gradient(to_bottom,black_85%,transparent)]">
           {!feed.length && <div className="py-10 text-center text-xs text-faint">Waiting for events…</div>}
           <AnimatePresence initial={false}>
             {feed.map((e) => <FeedRow key={eventKey(e)} e={e} onPick={setPick} />)}
