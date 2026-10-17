@@ -37,14 +37,20 @@ function U($d) { if ($d) { ([DateTimeOffset]$d).ToUnixTimeSeconds() } else { $nu
 function Opts($list) {
   @($list | ForEach-Object { [ordered]@{ id = [int]$_.OptionId; name = "$($_.Name)"; value = @($_.Value | ForEach-Object { "$_" }) } })
 }
-$srv = Get-DhcpServerSetting
+# Optional reads never abort the run: a denied cmdlet becomes a warning and the rest still flows.
+$W = New-Object System.Collections.Generic.List[string]
+function T([string]$what, [scriptblock]$sb) {
+  try { & $sb } catch { $W.Add("${what}: $($_.Exception.Message)"); $null }
+}
+$srv = T 'Get-DhcpServerSetting' { Get-DhcpServerSetting }
 $fqdn = $env:COMPUTERNAME
 try { $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName } catch { }
 $out = [ordered]@{
   server = $env:COMPUTERNAME; fqdn = $fqdn
-  authorized = [bool]$srv.IsAuthorized; conflict_attempts = [int]$srv.ConflictDetectionAttempts
-  server_options = Opts (Get-DhcpServerv4OptionValue -ErrorAction SilentlyContinue)
-  failover = @(Get-DhcpServerv4Failover -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{
+  authorized = $(if ($srv) { [bool]$srv.IsAuthorized } else { $null })
+  conflict_attempts = $(if ($srv) { [int]$srv.ConflictDetectionAttempts } else { $null })
+  server_options = Opts (T 'Get-DhcpServerv4OptionValue' { Get-DhcpServerv4OptionValue })
+  failover = @(T 'Get-DhcpServerv4Failover' { Get-DhcpServerv4Failover } | ForEach-Object { [ordered]@{
     name = "$($_.Name)"; partner = "$($_.PartnerServer)"; mode = "$($_.Mode)"; state = "$($_.State)"
     role = "$($_.ServerRole)"; lb = [int]$_.LoadBalancePercent; reserve = [int]$_.ReservePercent
     scopes = @($_.ScopeId | ForEach-Object { "$_" }) } })
@@ -55,17 +61,19 @@ $leases = New-Object System.Collections.Generic.List[object]
 $max = __MAX__
 foreach ($s in Get-DhcpServerv4Scope) {
   $id = $s.ScopeId
-  $st = Get-DhcpServerv4ScopeStatistics -ScopeId $id
+  $st = T "Get-DhcpServerv4ScopeStatistics $id" { Get-DhcpServerv4ScopeStatistics -ScopeId $id }
   $scopes.Add([ordered]@{
     id = "$id"; name = "$($s.Name)"; mask = "$($s.SubnetMask)"; start = "$($s.StartRange)"; end = "$($s.EndRange)"
     state = "$($s.State)"; lease_s = [int64]$s.LeaseDuration.TotalSeconds
     in_use = [int]$st.InUse; free = [int]$st.Free; pct = [double]$st.PercentageInUse; reserved = [int]$st.Reserved
-    options = Opts (Get-DhcpServerv4OptionValue -ScopeId $id -ErrorAction SilentlyContinue)
-    exclusions = @(Get-DhcpServerv4ExclusionRange -ScopeId $id -ErrorAction SilentlyContinue | ForEach-Object { "$($_.StartRange)-$($_.EndRange)" })
-    reservations = @(Get-DhcpServerv4Reservation -ScopeId $id -ErrorAction SilentlyContinue | ForEach-Object {
+    options = Opts (T "Get-DhcpServerv4OptionValue $id" { Get-DhcpServerv4OptionValue -ScopeId $id })
+    exclusions = @(T "Get-DhcpServerv4ExclusionRange $id" { Get-DhcpServerv4ExclusionRange -ScopeId $id } |
+      ForEach-Object { "$($_.StartRange)-$($_.EndRange)" })
+    reservations = @(T "Get-DhcpServerv4Reservation $id" { Get-DhcpServerv4Reservation -ScopeId $id } | ForEach-Object {
       [ordered]@{ ip = "$($_.IPAddress)"; mac = "$($_.ClientId)"; name = "$($_.Name)"; type = "$($_.Type)" } })
   })
-  foreach ($l in Get-DhcpServerv4Lease -ScopeId $id -ErrorAction SilentlyContinue) {
+  foreach ($l in @(T "Get-DhcpServerv4Lease $id" { Get-DhcpServerv4Lease -ScopeId $id })) {
+    if ($null -eq $l) { continue }
     if ($leases.Count -ge $max) { $out.truncated = $true; break }
     $leases.Add([ordered]@{ ip = "$($l.IPAddress)"; mac = "$($l.ClientId)"; host = "$($l.HostName)"
       state = "$($l.AddressState)"; scope = "$id"; expires = (U $l.LeaseExpiryTime) })
@@ -92,6 +100,7 @@ try {
   if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*') { $dns.events = @() } else { $dns.events_error = "$($_.Exception.Message)" }
 }
 $out.dns = $dns
+$out.warnings = $W.ToArray()
 $out | ConvertTo-Json -Depth 6 -Compress
 """
 
@@ -156,6 +165,7 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
         "authorized": raw.get("authorized"), "conflict_attempts": raw.get("conflict_attempts"),
         "server_options": _opts(raw.get("server_options")), "failover": failover, "scopes": scopes,
         "leases": leases, "truncated": bool(raw.get("truncated")),
+        "warnings": [str(w)[:300] for w in _list(raw.get("warnings"))][:20],
     }
 
 
@@ -170,7 +180,7 @@ def build_snapshot(data: dict[str, Any]) -> Snapshot:
                                f"scope {le['scope']}", le["expires"]) for le in good if le["mac"]]
     by_scope_fo = {sc: f["name"] for f in data["failover"] for sc in f["scopes"]}
     snap.dhcp_server = {
-        **{k: data[k] for k in ("server", "fqdn", "authorized", "conflict_attempts", "server_options", "failover", "truncated", "dns")},
+        **{k: data[k] for k in ("server", "fqdn", "authorized", "conflict_attempts", "server_options", "failover", "truncated", "dns", "warnings")},
         "scopes": [{**s, "failover": by_scope_fo.get(s["id"], "")} for s in data["scopes"]],
         "bad": [{"ip": le["ip"], "scope": le["scope"]} for le in leases if is_bad_address(le)],
         "pairs": [[le["mac"], le["ip"]] for le in active if le["mac"]],
@@ -262,8 +272,9 @@ class WindowsDhcpCollector(Collector):
             err = "; ".join(str(x) for x in streams.error)[:300] or "unknown PowerShell error"
             if "DhcpServer" in err and ("not loaded" in err or "not found" in err.lower()):
                 err = "The DhcpServer PowerShell module isn't installed on this server (is it a DHCP server?)"
-            elif "Access is denied" in err or "denied" in err.lower():
-                err = "Access denied - add the account to the 'DHCP Users' group on this server"
+            elif "denied" in err.lower():
+                # Keep Windows' own text: it names the cmdlet/object that was refused.
+                err = f"{err} (needs 'DHCP Users' + 'Remote Management Users'; sign-out/in or wait for a new token after adding)"
             raise CollectorError(err)
         try:
             return json.loads(output.strip().splitlines()[-1])

@@ -333,6 +333,7 @@ class WinDhcpAudit:
                 "scopes": [{k: sc[k] for k in ("id", "name", "mask", "start", "end", "state", "in_use", "free", "pct", "reserved",
                                                "failover")} for sc in d.get("scopes", [])],
                 "dns": _dns_summary(d.get("dns") or {}),
+                "warnings": d.get("warnings", []),
             })
         return out
 

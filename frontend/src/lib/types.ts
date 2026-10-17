@@ -544,6 +544,8 @@ export interface WinDhcpServer {
     scopes: string[]; partner_monitored: boolean }[];
   scopes: WinDhcpScope[];
   dns: WinDnsSummary | null;
+  /** Reads that were refused or failed (the rest of the data still came through). */
+  warnings: string[];
 }
 
 // ------------------------------------------------------------------ services (uptime)

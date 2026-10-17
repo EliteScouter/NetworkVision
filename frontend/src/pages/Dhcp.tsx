@@ -142,6 +142,12 @@ function WindowsDhcp({ servers }: { servers: WinDhcpServer[] }) {
                 {!f.partner_monitored && <span className="text-warn">partner not monitored - add it to check drift</span>}
               </div>
             ))}
+            {s.warnings?.length > 0 && (
+              <details className="mt-2 text-[11px] text-warn">
+                <summary className="cursor-pointer">{s.warnings.length} read{s.warnings.length > 1 ? "s" : ""} refused or failed — partial data</summary>
+                <ul className="mt-1 space-y-0.5 font-mono text-[10.5px] text-dim">{s.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+              </details>
+            )}
             {s.dns && <DnsRow d={s.dns} />}
             <div className="mt-3 space-y-2">
               {s.scopes.map((sc) => (

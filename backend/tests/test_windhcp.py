@@ -186,6 +186,8 @@ def test_normalize_dns_section():
     assert d["zones"][0]["dynamic"] == "NonsecureAndSecure" and d["forwarders"] == ["1.1.1.1"]
     assert d["events"] is None and d["events_error"] == "Access is denied"
     assert normalize(_raw("DC01"))["dns"]["zones"] is None  # no DNS data at all: unknown, not "zero zones"
+    raw["warnings"] = "Get-DhcpServerv4Failover: Access is denied."  # a single PowerShell string, not a list
+    assert normalize(raw)["warnings"] == ["Get-DhcpServerv4Failover: Access is denied."]
 
 
 async def test_audit_dns_issues(monkeypatch):
