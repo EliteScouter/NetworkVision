@@ -115,7 +115,8 @@ async def test_audit_finds_windows_dhcp_problems(monkeypatch):
         assert {i["subject"] for i in by_type["config_drift"]} == {"10.0.20.0", "DC01-DC02"}
         assert by_type["scope_full"][0]["severity"] == "critical"
         assert by_type["bad_address"][0]["members"] == [{"text": "10.0.20.130"}]
-        assert [i["subject"] for i in by_type["static_in_pool"]] == ["10.0.20.105"]
+        assert [i["subject"] for i in by_type["static_in_pool"]] == ["10.0.20.0"]
+        assert by_type["static_in_pool"][0]["members"] == [{"text": "10.0.20.105  nas  de:ad:be:ef:00:01"}]
         assert by_type["reservation_mismatch"][0]["subject"] == "aa:bb:cc:00:00:01"
         assert by_type["server_overlap"][0]["members"] == [{"text": "PFSense"}]
         assert "unauthorized" not in by_type
@@ -161,6 +162,7 @@ async def test_dns_probe_finds_stale_and_ptr(monkeypatch):
 
     monkeypatch.setattr(dns.asyncresolver.Resolver, "resolve", fake_resolve)
     leases = [{"ip": "10.0.20.101", "host": "LAPTOP"}, {"ip": "10.0.20.102", "host": "oldpc.corp.local"},
+              {"ip": "10.0.20.104", "host": "visitor.othercorp.com"},  # foreign suffix: not checked here
               {"ip": "10.0.20.103", "host": "phone"}, {"ip": "10.0.20.130", "host": "BAD_ADDRESS"}]
     p = await dns_probe.probe("10.0.0.10", "corp.local", "dc01.corp.local", "cloudflare.com", leases)
     assert p["ok"] and p["dc_srv"] == ["dc01.corp.local", "dc02.corp.local"] and p["self_a"] == ["10.0.0.10"]

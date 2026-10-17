@@ -231,10 +231,19 @@ class WinDhcpAudit:
             issue(f"overlap:{sid}", "server_overlap", "warning", f"Another DHCP server is handing out addresses in {sid}",
                   f"{', '.join(sorted(names))} also leases addresses in this Windows scope's subnet — two servers "
                   "on one subnet hand out conflicting addresses.", sid, sorted(names))
-        for ip, (o, sid) in sorted(squat.items(), key=lambda kv: _int(kv[0]) or 0)[:50]:
-            issue(f"static:{ip}", "static_in_pool", "warning", f"{o.hostname or o.mac} uses {ip} without a lease",
-                  f"{ip} is inside the dynamic range of scope {sid} but Windows has no lease or reservation for it — "
-                  "likely a static IP. Windows may hand this address to another device.", ip, [f"{o.mac} {o.hostname}".strip()])
+        by_scope: dict[str, list[tuple[str, Any]]] = {}
+        for ip, (o, sid) in squat.items():
+            by_scope.setdefault(sid, []).append((ip, o))
+        for sid, found in sorted(by_scope.items()):
+            found.sort(key=lambda x: _int(x[0]) or 0)
+            sc = scopes[sid]
+            n = len(found)
+            issue(f"static:{sid}", "static_in_pool", "warning",
+                  f"{n} device{'s' if n > 1 else ''} use{'' if n > 1 else 's'} a static IP inside the {sid} pool",
+                  f"These addresses are inside the dynamic range {sc['start']} – {sc['end']} but Windows has no lease or "
+                  "reservation for them, so it may hand one to another device (BAD_ADDRESS / conflicts). Exclude them from "
+                  "the range, add reservations, or move the devices outside the pool.",
+                  sid, [f"{ip}  {o.hostname or '—'}  {o.mac}" for ip, o in found])
         for mac, ip in reserved_mac.items():
             seen = ips_by_mac.get(mac)
             if seen and ip not in seen:

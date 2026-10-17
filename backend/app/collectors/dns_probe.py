@@ -83,7 +83,12 @@ async def probe(server: str, domain: str, own_fqdn: str, test_name: str, leases:
     for le in leases:
         h = (le.get("host") or "").strip()
         if h and h.upper() != "BAD_ADDRESS" and le.get("ip"):
-            by_host.setdefault(fqdn_for(h, domain), set()).add(le["ip"])
+            name = fqdn_for(h, domain)
+            # Only names this server is authoritative for: a laptop registered as "pc.othercorp.com" resolves
+            # through forwarders to someone else's DNS, which says nothing about this server's records.
+            if domain and not (name == domain or name.endswith("." + domain)):
+                continue
+            by_host.setdefault(name, set()).add(le["ip"])
     sem = asyncio.Semaphore(20)
 
     async def check(name: str, ips: set[str]) -> None:
