@@ -1,31 +1,49 @@
 import clsx from "clsx";
-import { AlertTriangle, BadgeCheck, CopyX, Network, Radar, Search, Server, Shuffle, Sparkles, Tag, Users } from "lucide-react";
+import {
+  AlertTriangle, BadgeCheck, Ban, Bookmark, CopyX, Gauge, GitCompare, Layers, MapPin, Network, Radar, Search, Server, ShieldX,
+  Shuffle, Sparkles, Tag, Unplug, Users,
+} from "lucide-react";
+import { Link } from "react-router";
 import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import { Badge, CountUp, Empty, Panel, StatusDot } from "../components/ui";
 import { api } from "../lib/api";
 import { ago, clock } from "../lib/format";
 import { useApi, useTick } from "../lib/hooks";
-import type { DhcpClient, DhcpIssue, DhcpOverview } from "../lib/types";
+import type { DhcpClient, DhcpIssue, DhcpOverview, WinDhcpServer } from "../lib/types";
 
 const ISSUE_META: Record<DhcpIssue["type"], { icon: typeof CopyX; label: string }> = {
   ip_conflict: { icon: CopyX, label: "IP conflict" },
   duplicate_hostname: { icon: Users, label: "Duplicate hostname" },
   address_hopping: { icon: Shuffle, label: "Address hopping" },
   multiple_servers: { icon: Server, label: "Multiple DHCP servers" },
+  failover: { icon: Unplug, label: "Failover" },
+  config_drift: { icon: GitCompare, label: "Config drift" },
+  scope_full: { icon: Gauge, label: "Scope nearly full" },
+  bad_address: { icon: Ban, label: "BAD_ADDRESS" },
+  static_in_pool: { icon: MapPin, label: "Static IP in pool" },
+  server_overlap: { icon: Layers, label: "Overlapping servers" },
+  reservation_mismatch: { icon: Bookmark, label: "Reservation" },
+  unauthorized: { icon: ShieldX, label: "Not authorized" },
 };
+
+const SEV_TONE = {
+  critical: { bar: "bg-crit", text: "text-crit", border: "border-crit/50 shadow-[0_0_26px_-12px_#fb4d6d]" },
+  warning: { bar: "bg-warn", text: "text-warn", border: "border-warn/40 shadow-[0_0_26px_-12px_#fbbf24]" },
+  info: { bar: "bg-info", text: "text-info", border: "border-edge" },
+} as const;
 
 type Filter = "active" | "unknown" | "new" | "conflict";
 
 function IssueCard({ issue, i }: { issue: DhcpIssue; i: number }) {
-  const meta = ISSUE_META[issue.type];
-  const warn = issue.severity === "warning";
+  const meta = ISSUE_META[issue.type] ?? { icon: AlertTriangle, label: issue.type };
+  const tone = SEV_TONE[issue.severity] ?? SEV_TONE.info;
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
-      className={clsx("relative overflow-hidden rounded-xl border bg-black/25 p-4", warn ? "border-warn/40 shadow-[0_0_26px_-12px_#fbbf24]" : "border-edge")}>
-      <span className={clsx("absolute inset-y-0 left-0 w-1", warn ? "bg-warn" : "bg-info")} />
+      className={clsx("relative overflow-hidden rounded-xl border bg-black/25 p-4", tone.border)}>
+      <span className={clsx("absolute inset-y-0 left-0 w-1", tone.bar)} />
       <div className="flex items-center gap-2">
-        <meta.icon size={16} className={warn ? "text-warn" : "text-info"} />
+        <meta.icon size={16} className={tone.text} />
         <Badge tone={issue.severity}>{meta.label}</Badge>
       </div>
       <div className="mt-2 font-medium">{issue.title}</div>
@@ -33,7 +51,9 @@ function IssueCard({ issue, i }: { issue: DhcpIssue; i: number }) {
       <div className="mt-3 space-y-1">
         {issue.members.slice(0, 8).map((m, j) => (
           <div key={j} className="flex items-center gap-3 font-mono text-[11.5px]">
-            {"server" in m ? (
+            {"text" in m ? (
+              <span className="text-dim [overflow-wrap:anywhere]">{String(m.text)}</span>
+            ) : "server" in m ? (
               <><span className="text-ink">{String(m.server)}</span><span className="text-faint">last lease {ago(Number(m.last_seen))}</span></>
             ) : (
               <>
@@ -46,6 +66,67 @@ function IssueCard({ issue, i }: { issue: DhcpIssue; i: number }) {
         ))}
       </div>
     </motion.div>
+  );
+}
+
+function utilColor(pct: number) {
+  return pct >= 95 ? "#fb4d6d" : pct >= 80 ? "#fbbf24" : "#22d3ee";
+}
+
+function WindowsDhcp({ servers }: { servers: WinDhcpServer[] }) {
+  return (
+    <Panel title={`Windows DHCP · ${servers.length} server${servers.length > 1 ? "s" : ""}`} icon={<Server size={15} />}>
+      <div className="grid gap-4 xl:grid-cols-2">
+        {servers.map((s) => (
+          <div key={s.device_id} className={clsx("rounded-xl border bg-black/20 p-4", s.stale ? "border-warn/40" : "border-edge")}>
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusDot status={s.stale ? "degraded" : "up"} />
+              <Link to={`/devices/${s.device_id}`} className="font-medium hover:text-cyan">{s.name}</Link>
+              <span className="font-mono text-[11px] text-faint">{s.fqdn}</span>
+              <span className="ml-auto flex flex-wrap gap-1.5">
+                {s.authorized === false ? <Badge tone="warning">not authorized in AD</Badge> : s.authorized && <Badge tone="ok">authorized</Badge>}
+                {s.bad > 0 && <Badge tone="warning">{s.bad} BAD_ADDRESS</Badge>}
+                {s.conflict_attempts === 0 && <Badge tone="neutral">conflict detection off</Badge>}
+              </span>
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-faint">
+              {s.lease_count ?? 0} leases{s.truncated ? " (truncated - raise Max leases read)" : ""} · read {ago(s.updated_at)}
+              {s.stale ? " · stale" : ""}
+            </div>
+            {s.failover.map((f) => (
+              <div key={f.name} className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-edge bg-black/20 px-3 py-2 text-xs">
+                <Unplug size={13} className="text-violet" />
+                <span className="font-medium">{f.name}</span>
+                <Badge tone={f.state.toLowerCase() === "normal" ? "ok" : f.state.toLowerCase() === "partnerdown" ? "critical" : "warning"}>{f.state}</Badge>
+                <span className="text-dim">{f.mode}{f.mode.toLowerCase().includes("load") && f.lb != null ? ` ${f.lb}/${100 - f.lb}` : ""} · {f.role}</span>
+                <span className="text-faint">partner {f.partner}</span>
+                {!f.partner_monitored && <span className="text-warn">partner not monitored - add it to check drift</span>}
+              </div>
+            ))}
+            <div className="mt-3 space-y-2">
+              {s.scopes.map((sc) => (
+                <div key={sc.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
+                  <div className="min-w-0 truncate text-sm">
+                    <span className="font-mono text-ink">{sc.id}</span>
+                    {sc.name && <span className="ml-2 text-dim">{sc.name}</span>}
+                    {sc.state.toLowerCase() !== "active" && <span className="ml-2 text-[11px] text-faint">({sc.state})</span>}
+                  </div>
+                  <div className="font-mono text-[11px] text-dim">{sc.in_use}/{sc.in_use + sc.free} · {sc.pct.toFixed(0)}%</div>
+                  <div className="col-span-2 h-1.5 overflow-hidden rounded-full bg-white/5">
+                    <motion.div className="h-full rounded-full" style={{ background: utilColor(sc.pct) }}
+                      initial={{ width: 0 }} animate={{ width: `${Math.min(100, sc.pct)}%` }} />
+                  </div>
+                  <div className="col-span-2 font-mono text-[10.5px] text-faint">
+                    {sc.start} – {sc.end} · {sc.reserved} reserved{sc.failover ? ` · failover ${sc.failover}` : ""}
+                  </div>
+                </div>
+              ))}
+              {!s.scopes.length && <div className="text-xs text-faint">No IPv4 scopes.</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }
 
@@ -111,6 +192,8 @@ export default function DhcpPage() {
           </div>
         )}
       </Panel>
+
+      {!!data?.windows?.length && <WindowsDhcp servers={data.windows} />}
 
       <Panel title="Address history" icon={<Radar size={15} />} bodyClass="!px-0"
         actions={

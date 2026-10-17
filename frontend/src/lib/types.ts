@@ -504,8 +504,8 @@ export interface DhcpClient {
 
 export interface DhcpIssue {
   key: string;
-  type: "ip_conflict" | "duplicate_hostname" | "address_hopping" | "multiple_servers";
-  severity: "warning" | "info";
+  type: "ip_conflict" | "duplicate_hostname" | "address_hopping" | "multiple_servers" | WinDhcpIssueType;
+  severity: "critical" | "warning" | "info";
   title: string;
   detail: string;
   subject: string;
@@ -518,6 +518,23 @@ export interface DhcpOverview {
   learning: boolean;
   stats: { total: number; active: number; macs: number; new_24h: number; unknown: number; issues: number };
   sources: Record<string, string | null>;
+  windows?: WinDhcpServer[];
+}
+
+export type WinDhcpIssueType = "failover" | "config_drift" | "scope_full" | "bad_address" | "static_in_pool" | "server_overlap"
+  | "reservation_mismatch" | "unauthorized";
+
+export interface WinDhcpScope {
+  id: string; name: string; mask: string; start: string; end: string; state: string;
+  in_use: number; free: number; pct: number; reserved: number; failover: string;
+}
+
+export interface WinDhcpServer {
+  device_id: number; name: string; fqdn: string | null; updated_at: number; stale: boolean;
+  authorized: boolean | null; conflict_attempts: number | null; lease_count: number | null; truncated: boolean; bad: number;
+  failover: { name: string; partner: string; mode: string; state: string; role: string; lb: number | null; reserve: number | null;
+    scopes: string[]; partner_monitored: boolean }[];
+  scopes: WinDhcpScope[];
 }
 
 // ------------------------------------------------------------------ services (uptime)

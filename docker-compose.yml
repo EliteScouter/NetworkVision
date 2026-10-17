@@ -48,6 +48,8 @@ services:
       NV_SEC_IGNORE_IPS: ${NV_SEC_IGNORE_IPS:-}
       NV_GEOIP_LICENSE_KEY: ${NV_GEOIP_LICENSE_KEY:-}
       NV_DHCP_LEARNING_HOURS: ${NV_DHCP_LEARNING_HOURS:-1}
+      NV_DHCP_SCOPE_WARN_PCT: ${NV_DHCP_SCOPE_WARN_PCT:-80}
+      NV_DHCP_SCOPE_CRIT_PCT: ${NV_DHCP_SCOPE_CRIT_PCT:-95}
       # Notifications (all optional)
       NV_NOTIFY_MIN_SEVERITY: ${NV_NOTIFY_MIN_SEVERITY:-warning}
       NV_NOTIFY_DISCORD_WEBHOOK_URL: ${NV_NOTIFY_DISCORD_WEBHOOK_URL:-}
@@ -64,6 +66,7 @@ services:
       UNIFI_API_KEY: ${UNIFI_API_KEY:-}
       SNMP_COMMUNITY: ${SNMP_COMMUNITY:-}
       TPLINK_PASSWORD: ${TPLINK_PASSWORD:-}
+      WINDHCP_PASSWORD: ${WINDHCP_PASSWORD:-}
     volumes:
       - networkvision-data:/data
       # KeePass: mount a dedicated .kdbx read-only, then set NV_KEEPASS_FILE=/secrets/networkvision.kdbx

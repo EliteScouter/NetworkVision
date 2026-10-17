@@ -13,6 +13,7 @@ from .ping import PingCollector
 from .snmp import SnmpCollector
 from .tplink import TplinkEasySmartCollector
 from .unifi import UnifiCollector
+from .windows_dhcp import WindowsDhcpCollector
 
 COLLECTORS: dict[str, type[Collector]] = {
     c.kind: c
@@ -21,6 +22,7 @@ COLLECTORS: dict[str, type[Collector]] = {
         OpnSenseCollector,
         UnifiCollector,
         SnmpCollector,
+        WindowsDhcpCollector,
         TplinkEasySmartCollector,
         PingCollector,
         DemoCollector,

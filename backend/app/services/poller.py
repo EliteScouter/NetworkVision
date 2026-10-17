@@ -46,6 +46,7 @@ from .keepass import keepass
 from .logs import pipeline
 from .runtime import runtime
 from .state import DeviceState, store
+from .windhcp import windhcp
 
 log = logging.getLogger("networkvision.poller")
 
@@ -232,6 +233,10 @@ class Poller:
         if snap.reachable:
             try:
                 await dhcp.observe(dev.id, snap)
+                if snap.dhcp_server:
+                    await windhcp.update(dev.id, dev.name, snap.dhcp_server)
+                elif windhcp.servers:  # other sources (UniFi, pfSense) change what's online in Windows' pools
+                    await windhcp.analyze()
             except Exception:  # noqa: BLE001 - insights must never break polling
                 log.exception("DHCP insights failed for %s", dev.name)
         self._dirty.set()

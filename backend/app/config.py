@@ -123,6 +123,8 @@ class Settings(BaseSettings):
     dhcp_enabled: bool = True
     dhcp_mac_max_ips: int = Field(default=4, ge=2)  # distinct IPs for one MAC in 24h before flagging
     dhcp_learning_hours: float = Field(default=1.0, ge=0)  # no "new device" alerts while learning
+    dhcp_scope_warn_pct: float = Field(default=80, ge=1, le=100)  # Windows DHCP scope utilization: warning
+    dhcp_scope_crit_pct: float = Field(default=95, ge=1, le=100)  # ... and critical
 
     # --- Notifications --------------------------------------------------------
     notify_min_severity: str = "warning"  # info | warning | critical

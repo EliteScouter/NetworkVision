@@ -112,6 +112,8 @@ class Snapshot:
     clients: list[dict[str, Any]] = field(default_factory=list)
     #: Wireless overview from a controller: {"aps": [...], "ssids": [...], "neighbors": [...]}.
     wifi: dict[str, Any] = field(default_factory=dict)
+    #: DHCP server configuration (Windows DHCP): scopes, failover, options... see collectors/windows_dhcp.py.
+    dhcp_server: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

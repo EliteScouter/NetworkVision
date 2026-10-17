@@ -17,7 +17,10 @@ const RULE_LABEL: Record<string, string> = {
   port_errors: "Port errors", port_saturated: "Saturation", firmware_update: "Firmware", log_event: "Critical log",
   sec_bruteforce: "Brute force", sec_login_after_failures: "Possible breach", sec_portscan: "Port scan", sec_ids: "IDS",
   sec_wan_spike: "WAN spike", dhcp_ip_conflict: "IP conflict", dhcp_duplicate_hostname: "Duplicate hostname",
-  dhcp_address_hopping: "Address hopping", dhcp_multiple_servers: "Multiple DHCP servers", dhcp_rogue_server: "Rogue DHCP",
+  dhcp_address_hopping: "Address hopping", dhcp_multiple_servers: "Multiple DHCP servers",
+  dhcp_failover: "DHCP failover unhealthy", dhcp_config_drift: "DHCP config drift", dhcp_scope_full: "DHCP scope nearly full",
+  dhcp_bad_address: "DHCP BAD_ADDRESS", dhcp_static_in_pool: "Static IP in DHCP pool", dhcp_server_overlap: "Overlapping DHCP servers",
+  dhcp_reservation_mismatch: "Reservation mismatch", dhcp_unauthorized: "DHCP server not authorized", dhcp_rogue_server: "Rogue DHCP",
   dhcp_nak_storm: "DHCPNAK storm", dhcp_new_device: "New device",
   speedtest_failed: "Speed test", speedtest_slow: "Slow internet",
 };

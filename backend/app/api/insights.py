@@ -19,6 +19,7 @@ from ..services.dhcp import dhcp
 from ..services.geoip import country, geoip
 from ..services.security import security
 from ..services.state import store
+from ..services.windhcp import windhcp
 
 router = APIRouter(prefix="/api", tags=["insights"], dependencies=[Depends(require_user)])
 
@@ -215,12 +216,13 @@ async def dhcp_overview() -> dict:
     now = time.time()
     return {
         "clients": clients,
-        "issues": dhcp.issues,
+        "issues": windhcp.issues + dhcp.issues,
         "learning": dhcp.learning(),
+        "windows": windhcp.summary(),
         "stats": {
             "total": len(clients), "active": sum(1 for c in clients if c["active"]),
             "macs": len({c["mac"] for c in clients}), "new_24h": len({c["mac"] for c in clients if now - c["first_seen"] < 86400}),
-            "unknown": len({c["mac"] for c in clients if not c["known"]}), "issues": len(dhcp.issues),
+            "unknown": len({c["mac"] for c in clients if not c["known"]}), "issues": len(dhcp.issues) + len(windhcp.issues),
         },
         "sources": {str(k): _device_name(k) for k in dhcp.current},
     }
