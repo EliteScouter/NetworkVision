@@ -15,7 +15,9 @@ def _scope(**kw):
             "state": "Active", "lease_s": 691200, "in_use": 50, "free": 51, "pct": 49.5, "reserved": 1,
             "options": [{"id": 3, "name": "Router", "value": ["10.0.20.1"]}, {"id": 6, "name": "DNS Servers", "value": ["10.0.0.10", "10.0.0.11"]}],
             "exclusions": ["10.0.20.150-10.0.20.159"],
-            "reservations": [{"ip": "10.0.20.120", "mac": "aa-bb-cc-00-00-01", "name": "printer", "type": "Both"}]}
+            "reservations": [{"ip": "10.0.20.120", "mac": "aa-bb-cc-00-00-01", "name": "printer", "type": "Both"},
+                             {"ip": "10.0.20.31", "mac": "00-00-00-00-00-01", "name": "static hold", "type": "Both"},
+                             {"ip": "10.0.20.140", "mac": "00-15-5d-02-09-06", "name": "old-vm", "type": "Both"}]}
     base.update(kw)
     return base
 
@@ -52,7 +54,8 @@ def test_normalize_and_snapshot():
     assert snap.metrics["clients"] == 2
     macs = {c["mac"]: c for c in snap.clients}
     assert set(macs) == {"11:22:33:44:55:66", "aa:bb:cc:00:00:01"}  # BAD_ADDRESS isn't a client
-    assert macs["aa:bb:cc:00:00:01"]["online"] is True
+    assert macs["aa:bb:cc:00:00:01"]["online"] is False  # a reservation isn't proof the device is online
+    assert macs["aa:bb:cc:00:00:01"]["lease"]["state"] == "reserved"
     ds = snap.dhcp_server
     assert ds["bad"] == [{"ip": "10.0.20.130", "scope": "10.0.20.0"}]
     assert ds["scopes"][0]["failover"] == "DC01-DC02"
@@ -106,6 +109,8 @@ async def test_audit_finds_windows_dhcp_problems(monkeypatch):
             Obs("de:ad:be:ef:00:02", "10.0.20.155", "cam", "controller", 3),       # static, but in an exclusion: fine
             Obs("aa:bb:cc:00:00:01", "10.0.20.99", "printer", "controller", 3),    # reserved .120, using .99
             Obs("de:ad:be:ef:00:03", "10.0.20.50", "phone", "lease", 4),           # pfSense leasing in the same subnet
+            Obs("bc:24:11:00:00:31", "10.0.20.31", "static-box", "controller", 3), # held by a placeholder: fine
+            Obs("bc:24:11:75:81:26", "10.0.20.140", "new-vm", "controller", 3),    # reserved for the old VM's MAC
         ]
         await audit.analyze(obs)
         by_type = {}
@@ -119,6 +124,8 @@ async def test_audit_finds_windows_dhcp_problems(monkeypatch):
         assert by_type["static_in_pool"][0]["members"] == [{"text": "10.0.20.105  nas  de:ad:be:ef:00:01"}]
         assert by_type["reservation_mismatch"][0]["subject"] == "aa:bb:cc:00:00:01"
         assert by_type["server_overlap"][0]["members"] == [{"text": "PFSense"}]
+        assert by_type["reserved_other"][0]["members"] == [
+            {"text": "10.0.20.140  reserved for 00:15:5d:02:09:06 (old-vm) · used by bc:24:11:75:81:26 (new-vm)"}]
         assert "unauthorized" not in by_type
         assert all(c.key.startswith("dhcp:win:") for c in synced["conds"])
         assert audit.issues[0]["severity"] == "critical"

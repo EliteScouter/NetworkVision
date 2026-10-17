@@ -34,7 +34,7 @@ from .alerts import engine as alerts
 log = logging.getLogger("networkvision.dhcp")
 
 STATEFUL_PREFIXES = ("dhcp:ipconflict:", "dhcp:macips:", "dhcp:duphost:", "dhcp:multi:")
-INACTIVE_STATES = {"expired", "free", "released", "abandoned", "backup", "reset", "declined"}
+INACTIVE_STATES = {"expired", "free", "released", "abandoned", "backup", "reset", "declined", "reserved"}
 GENERIC_HOSTNAMES = {"", "*", "-", "localhost", "unknown", "android", "iphone", "ipad", "espressif", "esp", "none",
                      "(null)", "null", "client", "device", "host"}
 PERSIST_EVERY = 300  # seconds between last_seen writes for an unchanged pair

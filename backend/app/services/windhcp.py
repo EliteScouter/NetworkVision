@@ -24,6 +24,7 @@ import logging
 import time
 from typing import Any
 
+from ..collectors.windows_dhcp import is_placeholder
 from ..config import get_settings
 from .alerts import Condition
 from .alerts import engine as alerts
@@ -204,8 +205,10 @@ class WinDhcpAudit:
         # --- cross-source checks against what's actually online
         win_ids = set(servers)
         win_pairs = {(m, ip) for srv in servers.values() for m, ip in srv["data"].get("pairs", [])}
-        reserved_ip = {r["ip"]: r["mac"] for sc in scopes.values() for r in sc.get("reservations", [])}
-        reserved_mac = {mac: ip for ip, mac in reserved_ip.items()}
+        reservations = {r["ip"]: (r, sid) for sid, sc in scopes.items() for r in sc.get("reservations", [])}
+        reserved_ip = {ip: r["mac"] for ip, (r, _) in reservations.items()}
+        reserved_mac = {mac: ip for ip, mac in reserved_ip.items() if not is_placeholder(mac)}
+        taken: dict[str, list[tuple[str, Any, dict[str, Any]]]] = {}  # scope -> reserved IPs used by another MAC
         geo = {sid: _ranges(sc) for sid, sc in scopes.items()}
         obs = observations if observations is not None else [o for lst in dhcp.current.values() for o in lst]
 
@@ -219,6 +222,11 @@ class WinDhcpAudit:
             n = _int(o.ip)
             if n is None:
                 continue
+            if o.source == "controller" and o.ip in reservations:
+                r, sid = reservations[o.ip]
+                if not is_placeholder(r["mac"]) and r["mac"] != o.mac:
+                    taken.setdefault(sid, []).append((o.ip, o, r))
+                continue  # reserved for it, or held by a placeholder for a static device: both intended
             for sid, (pool, excl, net) in geo.items():
                 if o.source == "lease" and net is not None and ipaddress.IPv4Address(n) in net:
                     dev = store.get(o.device_id)
@@ -244,6 +252,16 @@ class WinDhcpAudit:
                   "reservation for them, so it may hand one to another device (BAD_ADDRESS / conflicts). Exclude them from "
                   "the range, add reservations, or move the devices outside the pool.",
                   sid, [f"{ip}  {o.hostname or '—'}  {o.mac}" for ip, o in found])
+        for sid, found in sorted(taken.items()):
+            found.sort(key=lambda x: _int(x[0]) or 0)
+            n = len(found)
+            issue(f"taken:{sid}", "reserved_other", "warning",
+                  f"{n} reserved address{'es' if n > 1 else ''} in {sid} used by another device",
+                  "The reservation points at a different MAC than the device actually using the address — typically a VM "
+                  "rebuilt or moved to another hypervisor. Update the reservation's MAC (or delete it) so Windows doesn't "
+                  "hand the address out twice.",
+                  sid, [f"{ip}  reserved for {r['mac']}{' (' + r['name'] + ')' if r['name'] else ''} · used by {o.mac}"
+                        f"{' (' + o.hostname + ')' if o.hostname else ''}" for ip, o, r in found])
         for mac, ip in reserved_mac.items():
             seen = ips_by_mac.get(mac)
             if seen and ip not in seen:

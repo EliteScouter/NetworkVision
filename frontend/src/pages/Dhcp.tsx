@@ -24,6 +24,7 @@ const ISSUE_META: Record<DhcpIssue["type"], { icon: typeof CopyX; label: string 
   static_in_pool: { icon: MapPin, label: "Static IP in pool" },
   server_overlap: { icon: Layers, label: "Overlapping servers" },
   reservation_mismatch: { icon: Bookmark, label: "Reservation" },
+  reserved_other: { icon: Bookmark, label: "Reservation taken" },
   unauthorized: { icon: ShieldX, label: "Not authorized" },
   dns_down: { icon: ServerCrash, label: "DNS down" },
   dns_ad_records: { icon: Server, label: "DC records" },

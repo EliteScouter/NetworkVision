@@ -124,6 +124,11 @@ def _opts(raw: Any) -> list[dict[str, Any]]:
     return sorted(out, key=lambda o: o["id"])
 
 
+def is_placeholder(mac: str) -> bool:
+    """Made-up client IDs (00:00:00:00:00:01...) used to hold an address for a statically configured device."""
+    return not mac or mac.startswith("00:00:00:00:00") or mac in ("ff:ff:ff:ff:ff:ff",) or len(set(mac.replace(":", ""))) == 1
+
+
 def is_bad_address(lease: dict[str, Any]) -> bool:
     return str(lease.get("host") or "").upper() == "BAD_ADDRESS" or "declined" in str(lease.get("state") or "").lower()
 
@@ -181,8 +186,10 @@ def build_snapshot(data: dict[str, Any]) -> Snapshot:
     snap = Snapshot()
     snap.metrics["clients"] = len(active)
     snap.facts.update({"hostname": data["fqdn"], "dhcp_authorized": data["authorized"]})
-    snap.clients = [from_lease(le["mac"], le["ip"], le["host"], "active" if le["state"].lower() in ACTIVE_STATES else le["state"].lower(),
-                               f"scope {le['scope']}", le["expires"]) for le in good if le["mac"]]
+    # Windows lists every reservation as "ActiveReservation" whether or not the device is online, so a
+    # reservation is not evidence that the address is in use (an old VM's MAC would look like a conflict).
+    snap.clients = [from_lease(le["mac"], le["ip"], le["host"], _lease_state(le["state"]), f"scope {le['scope']}", le["expires"])
+                    for le in good if le["mac"] and not is_placeholder(le["mac"])]
     by_scope_fo = {sc: f["name"] for f in data["failover"] for sc in f["scopes"]}
     snap.dhcp_server = {
         **{k: data[k] for k in ("server", "fqdn", "authorized", "conflict_attempts", "server_options", "failover", "truncated", "dns", "warnings")},
@@ -203,6 +210,11 @@ def build_snapshot(data: dict[str, Any]) -> Snapshot:
                 rows=[[le["ip"], le["mac"], le["host"], le["scope"], le["state"]] for le in leases[:500]]),
     ]
     return snap
+
+
+def _lease_state(state: str) -> str:
+    s = state.lower()
+    return "active" if s == "active" else "reserved" if s == "activereservation" else s
 
 
 class WindowsDhcpCollector(Collector):

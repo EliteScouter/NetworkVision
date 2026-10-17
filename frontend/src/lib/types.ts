@@ -522,7 +522,7 @@ export interface DhcpOverview {
 }
 
 export type WinDhcpIssueType = "failover" | "config_drift" | "scope_full" | "bad_address" | "static_in_pool" | "server_overlap"
-  | "reservation_mismatch" | "unauthorized" | "dns_down" | "dns_ad_records" | "dns_external" | "dns_events" | "dns_mismatch"
+  | "reservation_mismatch" | "reserved_other" | "unauthorized" | "dns_down" | "dns_ad_records" | "dns_external" | "dns_events" | "dns_mismatch"
   | "dns_insecure_updates" | "dns_stale" | "dns_ptr";
 
 export interface WinDnsSummary {
