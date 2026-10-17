@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import time
 from typing import Any
 
@@ -28,6 +29,10 @@ from . import dns_probe
 from .base import Collector, CollectorError, FieldSpec, Section, Snapshot, norm_mac
 
 ACTIVE_STATES = {"active", "activereservation"}
+
+# pypsrp logs the whole script at INFO on every run; spnego can log auth details at DEBUG.
+for _name in ("pypsrp", "spnego"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 # Kept PowerShell 5.1 compatible (Windows Server 2016+). __MAX__ is replaced with the lease cap.
 SCRIPT = r"""
@@ -272,6 +277,9 @@ class WindowsDhcpCollector(Collector):
             err = "; ".join(str(x) for x in streams.error)[:300] or "unknown PowerShell error"
             if "DhcpServer" in err and ("not loaded" in err or "not found" in err.lower()):
                 err = "The DhcpServer PowerShell module isn't installed on this server (is it a DHCP server?)"
+            elif "cim server" in err.lower() and "denied" in err.lower():
+                err = (f"{err} - grant 'Enable Account' + 'Remote Enable' on the WMI namespace root/Microsoft/Windows/DHCP "
+                       "to the 'DHCP Users' group on this server (WMI Control, wmimgmt.msc)")
             elif "denied" in err.lower():
                 # Keep Windows' own text: it names the cmdlet/object that was refused.
                 err = f"{err} (needs 'DHCP Users' + 'Remote Management Users'; sign-out/in or wait for a new token after adding)"
