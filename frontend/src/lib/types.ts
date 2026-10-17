@@ -522,7 +522,15 @@ export interface DhcpOverview {
 }
 
 export type WinDhcpIssueType = "failover" | "config_drift" | "scope_full" | "bad_address" | "static_in_pool" | "server_overlap"
-  | "reservation_mismatch" | "unauthorized";
+  | "reservation_mismatch" | "unauthorized" | "dns_down" | "dns_ad_records" | "dns_external" | "dns_events" | "dns_mismatch"
+  | "dns_insecure_updates" | "dns_stale" | "dns_ptr";
+
+export interface WinDnsSummary {
+  role: boolean; ok: boolean | null; error: string | null; latency_ms: number | null; domain: string | null; dc_srv: string[];
+  external_ok: boolean | null; checked: number; stale: number; missing: number; ptr_mismatch: number;
+  zones: number | null; forwarders: string[] | null; scavenging: boolean | null; config_error: string | null;
+  events: number | null; events_error: string | null;
+}
 
 export interface WinDhcpScope {
   id: string; name: string; mask: string; start: string; end: string; state: string;
@@ -535,6 +543,7 @@ export interface WinDhcpServer {
   failover: { name: string; partner: string; mode: string; state: string; role: string; lb: number | null; reserve: number | null;
     scopes: string[]; partner_monitored: boolean }[];
   scopes: WinDhcpScope[];
+  dns: WinDnsSummary | null;
 }
 
 // ------------------------------------------------------------------ services (uptime)

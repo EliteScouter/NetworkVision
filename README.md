@@ -3,7 +3,7 @@
 # NetworkVision
 
 **One futuristic pane of glass for your whole network.**
-pfSense · OPNsense · UniFi · HP ProCurve · TP-Link · Windows DHCP · anything SNMP · syslog from everything.
+pfSense · OPNsense · UniFi · HP ProCurve · TP-Link · Windows DHCP & DNS · anything SNMP · syslog from everything.
 
 </div>
 
@@ -40,7 +40,7 @@ something goes wrong. It ships as a single Docker container that drops straight 
 | **UniFi Network** (Cloud Key Gen1/Gen2/+, UDM, UCG, self-hosted) | Local account or API key | Auto-discovers every switch/AP/gateway: ports, PoE, SFP, uplinks, clients, WAN health, alarms, events, networks |
 | **SNMP v2c / v3** | Standard MIBs + vendor fallbacks | Interfaces, traffic, errors, CPU, memory, temperature, VLANs, LLDP neighbors. Covers HP ProCurve/Aruba, managed TP-Link, UniFi switches, Cisco, MikroTik, Linux, Synology |
 | **TP-Link Easy Smart** (TL-SG108E…) *(experimental)* | Read-only web UI | Port link/speed, packet & error counters, VLANs |
-| **Windows Server DHCP** | WinRM / PowerShell (read-only) | Scopes & utilization, leases, reservations, BAD_ADDRESS, failover state, config drift between failover partners, static IPs inside pools, overlapping DHCP servers |
+| **Windows Server DHCP & DNS** | WinRM / PowerShell (read-only) + direct DNS queries | Scopes & utilization, leases, reservations, BAD_ADDRESS, failover state, config drift between failover partners, static IPs inside pools, overlapping DHCP servers. DNS: server answering, AD DC locator records (and whether DCs agree), external resolution, stale A / mismatched PTR records for DHCP clients, nonsecure dynamic updates, DNS Server log errors |
 | **Ping / TCP** | ICMP with TCP fallback | Up/down, latency, loss for anything with an IP |
 | **Syslog** | UDP/TCP 514 → container 5514 | Every log line from every device, matched by IP/hostname |
 
@@ -130,10 +130,11 @@ HAProxy endpoint, or one fixed node. That avoids multi-master write conflicts en
 - **HP ProCurve**: `snmp-server community "<community>" restricted` and `lldp run` (on by default). Use the SNMP integration.
 - **TP-Link managed (JetStream/Omada)**: enable SNMP. Use the SNMP integration.
 - **TP-Link Easy Smart (TL-SG108E)**: no SNMP exists, so use the *Easy Smart* integration (read-only scraping). These switches allow only one web session at a time.
-- **Windows Server DHCP**: add *each* DHCP server (both failover partners) so their configuration can be compared.
+- **Windows Server DHCP & DNS**: add *each* DHCP server (both failover partners) so their configuration can be compared. DNS is checked on the same servers.
   1. Create a plain domain account (e.g. `svc-networkvision`) and add it to **DHCP Users** and **Remote Management Users** on each server. No admin rights are needed.
   2. Enable WinRM over HTTPS (port 5986), e.g. `winrm quickconfig -transport:https` with a certificate from your CA, and allow 5986 from the Docker host. HTTP (5985) also works and is still encrypted by NTLM.
   3. Put the password in the stack env (e.g. `WINDHCP_PASSWORD`) and enter `env:WINDHCP_PASSWORD` in the integration form, with the user as `DOMAIN\svc-networkvision`.
+  4. Optional: add the account to **Event Log Readers** to see DNS Server log errors. Do **not** add it to *DnsAdmins* (that group can take over the domain); zone and forwarder details are simply skipped without it. The DNS health checks themselves are plain DNS queries from NetworkVision (UDP/TCP 53 to the servers) and need no rights.
 
 ### Services (uptime monitoring)
 

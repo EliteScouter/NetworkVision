@@ -132,3 +132,104 @@ async def test_audit_finds_windows_dhcp_problems(monkeypatch):
         assert audit.issues == []
     finally:
         store.devices.clear()
+
+
+async def test_dns_probe_finds_stale_and_ptr(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    import dns.asyncresolver
+    import dns.resolver
+
+    from app.collectors import dns_probe
+
+    zone = {
+        ("corp.local", "SOA"): [NS()],
+        ("_ldap._tcp.dc._msdcs.corp.local", "SRV"): [NS(target="dc01.corp.local."), NS(target="dc02.corp.local.")],
+        ("dc01.corp.local", "A"): [NS(address="10.0.0.10")],
+        ("laptop.corp.local", "A"): [NS(address="10.0.20.101")],        # matches its lease
+        ("oldpc.corp.local", "A"): [NS(address="10.0.20.177")],         # stale: leased .102 now
+        ("101.20.0.10.in-addr.arpa.", "PTR"): [NS(target="laptop.corp.local.")],
+        ("102.20.0.10.in-addr.arpa.", "PTR"): [NS(target="somebody-else.corp.local.")],
+    }
+
+    async def fake_resolve(self, name, rtype, **kw):
+        if name == "cloudflare.com":
+            raise dns.resolver.LifetimeTimeout(timeout=1, errors=[])
+        if (name, rtype) not in zone:
+            raise dns.resolver.NXDOMAIN()
+        return zone[(name, rtype)]
+
+    monkeypatch.setattr(dns.asyncresolver.Resolver, "resolve", fake_resolve)
+    leases = [{"ip": "10.0.20.101", "host": "LAPTOP"}, {"ip": "10.0.20.102", "host": "oldpc.corp.local"},
+              {"ip": "10.0.20.103", "host": "phone"}, {"ip": "10.0.20.130", "host": "BAD_ADDRESS"}]
+    p = await dns_probe.probe("10.0.0.10", "corp.local", "dc01.corp.local", "cloudflare.com", leases)
+    assert p["ok"] and p["dc_srv"] == ["dc01.corp.local", "dc02.corp.local"] and p["self_a"] == ["10.0.0.10"]
+    assert p["external_ok"] is False
+    assert p["checked"] == 3 and p["missing"] == 1
+    assert p["stale"] == [{"host": "oldpc.corp.local", "lease_ips": ["10.0.20.102"], "dns_ips": ["10.0.20.177"]}]
+    assert p["ptr_mismatch"] == [{"ip": "10.0.20.102", "host": "oldpc.corp.local", "ptr": ["somebody-else.corp.local"]}]
+
+    async def dead(self, name, rtype, **kw):
+        raise dns.resolver.LifetimeTimeout(timeout=1, errors=[])
+
+    monkeypatch.setattr(dns.asyncresolver.Resolver, "resolve", dead)
+    p = await dns_probe.probe("10.0.0.10", "corp.local", "dc01.corp.local", "", leases)
+    assert p["ok"] is False and "no answer" in p["error"]
+
+
+def test_normalize_dns_section():
+    raw = _raw("DC01")
+    raw["dns"] = {"available": True, "zones": {"name": "corp.local", "type": "Primary", "ad": True, "reverse": False,
+                                               "dynamic": "NonsecureAndSecure", "paused": False},
+                  "forwarders": "1.1.1.1", "scavenging": False, "events_error": "Access is denied"}
+    d = normalize(raw)["dns"]
+    assert d["zones"][0]["dynamic"] == "NonsecureAndSecure" and d["forwarders"] == ["1.1.1.1"]
+    assert d["events"] is None and d["events_error"] == "Access is denied"
+    assert normalize(_raw("DC01"))["dns"]["zones"] is None  # no DNS data at all: unknown, not "zero zones"
+
+
+async def test_audit_dns_issues(monkeypatch):
+    monkeypatch.setattr("app.services.windhcp.alerts.sync_group", lambda *a: _noop())
+    store.devices.clear()
+    store.devices.update({1: DeviceState(id=1, name="DC01", kind="windows_dhcp", role="server", host="dc01"),
+                          2: DeviceState(id=2, name="DC02", kind="windows_dhcp", role="server", host="dc02")})
+    try:
+        def data(probe, **dns):
+            d = build_snapshot(normalize(_raw("DCx", leases=[]))).dhcp_server
+            d["dns"] = {"available": True, "zones": None, "forwarders": None, "scavenging": None, "events": None, **dns,
+                        "probe": probe}
+            return d
+
+        ok = {"ok": True, "domain": "corp.local", "dc_srv": ["dc01.corp.local", "dc02.corp.local"], "external_ok": True,
+              "stale": [{"host": "oldpc.corp.local", "lease_ips": ["10.0.20.102"], "dns_ips": ["10.0.20.177"]}],
+              "ptr_mismatch": [], "checked": 5}
+        behind = {**ok, "dc_srv": ["dc01.corp.local"], "external_ok": False, "external_error": "no answer"}
+        audit = WinDhcpAudit()
+        audit.servers = {
+            1: {"name": "DC01", "at": 9e12, "data": data(ok, scavenging=False, zones=[
+                {"name": "corp.local", "type": "Primary", "ad": True, "reverse": False, "dynamic": "NonsecureAndSecure", "paused": False}],
+                events=[{"id": 4013, "level": 3, "ts": 1, "msg": "The DNS server is waiting for AD DS"}])},
+            2: {"name": "DC02", "at": 9e12, "data": data(behind)},
+        }
+        await audit.analyze([])
+        types = {i["type"]: i for i in audit.issues}
+        assert types["dns_mismatch"]["members"] == [{"text": "DC02 is missing dc02.corp.local"}]
+        assert types["dns_external"]["title"].startswith("DC02")
+        assert "Scavenging is off on DC01" in types["dns_stale"]["detail"]
+        assert types["dns_insecure_updates"]["subject"] == "corp.local"
+        assert types["dns_events"]["severity"] == "info"
+        assert "dns_down" not in types
+        assert audit.summary()[0]["dns"]["stale"] == 1
+
+        audit.servers[2]["data"]["dns"]["probe"] = {"ok": False, "error": "no answer for corp.local"}
+        await audit.analyze([])
+        assert any(i["type"] == "dns_down" and i["severity"] == "critical" for i in audit.issues)
+        audit.servers[2]["data"]["dns"]["available"] = False  # DHCP-only box: no DNS role, no alert
+        await audit.analyze([])
+        assert not any(i["type"] == "dns_down" for i in audit.issues)
+    finally:
+        store.devices.clear()
+
+
+async def _noop():
+    return None

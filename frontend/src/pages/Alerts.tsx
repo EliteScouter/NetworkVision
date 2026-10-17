@@ -20,7 +20,10 @@ const RULE_LABEL: Record<string, string> = {
   dhcp_address_hopping: "Address hopping", dhcp_multiple_servers: "Multiple DHCP servers",
   dhcp_failover: "DHCP failover unhealthy", dhcp_config_drift: "DHCP config drift", dhcp_scope_full: "DHCP scope nearly full",
   dhcp_bad_address: "DHCP BAD_ADDRESS", dhcp_static_in_pool: "Static IP in DHCP pool", dhcp_server_overlap: "Overlapping DHCP servers",
-  dhcp_reservation_mismatch: "Reservation mismatch", dhcp_unauthorized: "DHCP server not authorized", dhcp_rogue_server: "Rogue DHCP",
+  dhcp_reservation_mismatch: "Reservation mismatch", dhcp_unauthorized: "DHCP server not authorized",
+  dhcp_dns_down: "DNS server not answering", dhcp_dns_ad_records: "DC records missing", dhcp_dns_external: "External DNS failing",
+  dhcp_dns_events: "DNS Server log errors", dhcp_dns_mismatch: "DC records differ", dhcp_dns_insecure_updates: "Nonsecure DNS updates",
+  dhcp_dns_stale: "Stale DNS records", dhcp_dns_ptr: "PTR mismatch", dhcp_rogue_server: "Rogue DHCP",
   dhcp_nak_storm: "DHCPNAK storm", dhcp_new_device: "New device",
   speedtest_failed: "Speed test", speedtest_slow: "Slow internet",
 };

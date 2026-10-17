@@ -1,4 +1,4 @@
-"""Windows DHCP audit: checks that need the whole picture, not one lease table.
+"""Windows DHCP + DNS audit: checks that need the whole picture, not one lease table.
 
 Fed by the Windows DHCP collector (``Snapshot.dhcp_server``) and the DHCP insights'
 active observations from every other source (UniFi clients, pfSense/OPNsense leases):
@@ -12,6 +12,9 @@ active observations from every other source (UniFi clients, pfSense/OPNsense lea
 * overlapping servers  - another DHCP server handing out leases in a Windows scope's subnet
 * reservation mismatch - a reserved device that is using a different address
 * unauthorized server  - DHCP server not authorized in Active Directory
+* DNS                  - server not answering, missing / inconsistent DC locator records, external
+                         resolution broken, stale A and mismatched PTR records for DHCP clients,
+                         zones accepting nonsecure updates, DNS Server event log errors
 """
 
 from __future__ import annotations
@@ -239,9 +242,78 @@ class WinDhcpAudit:
                       f"It has a reservation for {ip}. It may have a static IP or be getting its address from another server.",
                       mac, [f"Reserved {ip}", *[f"Seen with {x}" for x in sorted(seen)]])
 
+        self._dns(servers, issue)
+
         rank = {"critical": 0, "warning": 1, "info": 2}
         self.issues = sorted(issues, key=lambda i: rank.get(i["severity"], 3))
         await alerts.sync_group((PREFIX,), conds)
+
+    # ---------------------------------------------------------------------- DNS
+    def _dns(self, servers: dict[int, dict[str, Any]], issue: Any) -> None:
+        srv_sets: dict[str, list[str]] = {}
+        stale: dict[str, dict[str, Any]] = {}
+        ptr: dict[str, dict[str, Any]] = {}
+        insecure: dict[str, list[str]] = {}
+        scavenging_off: list[str] = []
+        for did, srv in servers.items():
+            name, dns = srv["name"], srv["data"].get("dns") or {}
+            p = dns.get("probe")
+            if p is not None:
+                if not p.get("ok"):
+                    if not dns.get("available"):  # a DHCP-only server: no DNS role to complain about
+                        continue
+                    issue(f"dns:down:{did}", "dns_down", "critical", f"DNS on {name} is not answering",
+                          p.get("error") or "No reply to DNS queries for its domain.", name, [], did)
+                else:
+                    if p.get("domain") and not p.get("dc_srv"):
+                        issue(f"dns:srv:{did}", "dns_ad_records", "warning", f"{name} returns no domain controller records",
+                              f"_ldap._tcp.dc._msdcs.{p['domain']} is empty — clients can't locate a DC through this server. "
+                              "Check that Netlogon registered its records (nltest /dsregdns) and the _msdcs zone replicated.",
+                              name, [], did)
+                    if p.get("domain"):
+                        srv_sets[name] = p.get("dc_srv") or []
+                    if p.get("external_ok") is False:
+                        issue(f"dns:ext:{did}", "dns_external", "warning", f"{name} can't resolve internet names",
+                              "The external test name failed — check its forwarders or root hints and outbound UDP/TCP 53.",
+                              name, [p.get("external_error") or ""], did)
+                for x in p.get("stale", []):
+                    stale.setdefault(x["host"], x)
+                for x in p.get("ptr_mismatch", []):
+                    ptr.setdefault(x["ip"], x)
+            errors = [e for e in dns.get("events") or [] if e["level"] == 2]
+            warns = [e for e in dns.get("events") or [] if e["level"] == 3]
+            if errors or warns:
+                issue(f"dns:events:{did}", "dns_events", "warning" if errors else "info",
+                      f"{len(errors) + len(warns)} DNS Server log {'errors' if errors else 'warnings'} on {name} (24h)",
+                      "From the DNS Server event log.", name, [f"{e['id']}: {e['msg']}" for e in errors + warns], did)
+            for z in dns.get("zones") or []:
+                if not z["reverse"] and "nonsecure" in z["dynamic"].lower():
+                    insecure.setdefault(z["name"], []).append(name)
+            if dns.get("scavenging") is False:
+                scavenging_off.append(name)
+
+        if len(srv_sets) > 1 and len({tuple(v) for v in srv_sets.values()}) > 1:
+            every = sorted(set().union(*srv_sets.values()))
+            issue("dns:srvdiff", "dns_mismatch", "warning", "Domain controllers disagree on DC records",
+                  "The DC locator records differ between servers — usually AD replication of the _msdcs zone is behind or broken "
+                  "(check repadmin /replsummary).", "dc_srv",
+                  [f"{n} is missing {', '.join(x for x in every if x not in v)}" for n, v in sorted(srv_sets.items())
+                   if set(every) - set(v)])
+        for zone, names in sorted(insecure.items()):
+            issue(f"dns:insecure:{zone}", "dns_insecure_updates", "warning", f"Zone {zone} accepts nonsecure dynamic updates",
+                  "Anyone on the network can register or overwrite records in it. AD-integrated zones should use "
+                  "“Secure only”.", zone, [f"on {', '.join(sorted(set(names)))}"])
+        if stale:
+            hint = (" Scavenging is off on " + ", ".join(sorted(set(scavenging_off))) + " — old records never age out."
+                    if scavenging_off else "")
+            issue("dns:stale", "dns_stale", "warning", f"{len(stale)} DNS record{'s' if len(stale) > 1 else ''} point at the wrong address",
+                  "The A record doesn't match any of the host's current DHCP leases, so the name resolves to an old address."
+                  + hint, "stale", [f"{h}: DNS {', '.join(x['dns_ips'])} · lease {', '.join(x['lease_ips'])}"
+                                    for h, x in sorted(stale.items())])
+        if ptr:
+            issue("dns:ptr", "dns_ptr", "info", f"{len(ptr)} reverse record{'s' if len(ptr) > 1 else ''} don't match",
+                  "The PTR for the lease address names a different host - reverse lookups (logs, firewall views) show the wrong name.",
+                  "ptr", [f"{x['ip']}: PTR {', '.join(x['ptr'])} · lease {x['host']}" for _, x in sorted(ptr.items())])
 
     # ---------------------------------------------------------------------- api
     def summary(self) -> list[dict[str, Any]]:
@@ -260,8 +332,25 @@ class WinDhcpAudit:
                 "failover": [{**f, "partner_monitored": len(names.get(f["name"], [])) > 1} for f in d.get("failover", [])],
                 "scopes": [{k: sc[k] for k in ("id", "name", "mask", "start", "end", "state", "in_use", "free", "pct", "reserved",
                                                "failover")} for sc in d.get("scopes", [])],
+                "dns": _dns_summary(d.get("dns") or {}),
             })
         return out
+
+
+def _dns_summary(dns: dict[str, Any]) -> dict[str, Any] | None:
+    if not dns:
+        return None
+    p = dns.get("probe") or {}
+    zones = dns.get("zones")
+    return {
+        "role": dns.get("available"), "ok": p.get("ok"), "error": p.get("error"), "latency_ms": p.get("latency_ms"),
+        "domain": p.get("domain"), "dc_srv": p.get("dc_srv", []), "external_ok": p.get("external_ok"),
+        "checked": p.get("checked", 0), "stale": len(p.get("stale", [])), "missing": p.get("missing", 0),
+        "ptr_mismatch": len(p.get("ptr_mismatch", [])),
+        "zones": None if zones is None else len(zones), "forwarders": dns.get("forwarders"), "scavenging": dns.get("scavenging"),
+        "config_error": dns.get("config_error"),
+        "events": None if dns.get("events") is None else len(dns["events"]), "events_error": dns.get("events_error"),
+    }
 
 
 windhcp = WinDhcpAudit()

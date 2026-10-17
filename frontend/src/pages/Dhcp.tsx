@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import {
-  AlertTriangle, BadgeCheck, Ban, Bookmark, CopyX, Gauge, GitCompare, Layers, MapPin, Network, Radar, Search, Server, ShieldX,
-  Shuffle, Sparkles, Tag, Unplug, Users,
+  AlertTriangle, BadgeCheck, Ban, Bookmark, CopyX, FileWarning, Gauge, GitCompare, Globe, Layers, Link2Off, MapPin, Network,
+  Radar, Search, Server, ServerCrash, ShieldAlert, ShieldX, Shuffle, Sparkles, Split, Tag, Unplug, Users,
 } from "lucide-react";
 import { Link } from "react-router";
 import { motion } from "motion/react";
@@ -10,7 +10,7 @@ import { Badge, CountUp, Empty, Panel, StatusDot } from "../components/ui";
 import { api } from "../lib/api";
 import { ago, clock } from "../lib/format";
 import { useApi, useTick } from "../lib/hooks";
-import type { DhcpClient, DhcpIssue, DhcpOverview, WinDhcpServer } from "../lib/types";
+import type { DhcpClient, DhcpIssue, DhcpOverview, WinDhcpServer, WinDnsSummary } from "../lib/types";
 
 const ISSUE_META: Record<DhcpIssue["type"], { icon: typeof CopyX; label: string }> = {
   ip_conflict: { icon: CopyX, label: "IP conflict" },
@@ -25,6 +25,14 @@ const ISSUE_META: Record<DhcpIssue["type"], { icon: typeof CopyX; label: string 
   server_overlap: { icon: Layers, label: "Overlapping servers" },
   reservation_mismatch: { icon: Bookmark, label: "Reservation" },
   unauthorized: { icon: ShieldX, label: "Not authorized" },
+  dns_down: { icon: ServerCrash, label: "DNS down" },
+  dns_ad_records: { icon: Server, label: "DC records" },
+  dns_external: { icon: Globe, label: "External DNS" },
+  dns_events: { icon: FileWarning, label: "DNS log" },
+  dns_mismatch: { icon: Split, label: "DC records differ" },
+  dns_insecure_updates: { icon: ShieldAlert, label: "Insecure updates" },
+  dns_stale: { icon: Link2Off, label: "Stale DNS" },
+  dns_ptr: { icon: Shuffle, label: "PTR mismatch" },
 };
 
 const SEV_TONE = {
@@ -73,9 +81,40 @@ function utilColor(pct: number) {
   return pct >= 95 ? "#fb4d6d" : pct >= 80 ? "#fbbf24" : "#22d3ee";
 }
 
+function DnsRow({ d }: { d: WinDnsSummary }) {
+  if (!d.role && !d.ok) return null;
+  const bits: string[] = [];
+  if (d.latency_ms != null) bits.push(`${d.latency_ms.toFixed(0)} ms`);
+  if (d.domain) bits.push(`${d.dc_srv.length} DC record${d.dc_srv.length === 1 ? "" : "s"}`);
+  if (d.zones != null) bits.push(`${d.zones} zones`);
+  if (d.forwarders?.length) bits.push(`fwd ${d.forwarders.join(", ")}`);
+  if (d.checked) bits.push(`${d.checked} lease names checked`);
+  return (
+    <div className="mt-3 rounded-lg border border-edge bg-black/20 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <Globe size={13} className="text-cyan" />
+        <span className="font-medium">DNS{d.domain ? ` · ${d.domain}` : ""}</span>
+        {d.ok == null ? <Badge tone="neutral">not checked</Badge> : d.ok ? <Badge tone="ok">answering</Badge> : <Badge tone="critical">not answering</Badge>}
+        {d.external_ok === false && <Badge tone="warning">external fails</Badge>}
+        {d.stale > 0 && <Badge tone="warning">{d.stale} stale</Badge>}
+        {d.ptr_mismatch > 0 && <Badge tone="info">{d.ptr_mismatch} PTR mismatch</Badge>}
+        {!!d.events && <Badge tone="warning">{d.events} log events</Badge>}
+        {d.scavenging === false && <Badge tone="neutral">scavenging off</Badge>}
+      </div>
+      <div className="mt-1 font-mono text-[10.5px] text-faint">{d.error ?? bits.join(" · ")}</div>
+      {(d.config_error || d.events_error) && (
+        <div className="mt-1 text-[10.5px] text-faint">
+          {d.config_error && <>Zones/forwarders need DNS read rights (optional). </>}
+          {d.events_error && <>Add the account to “Event Log Readers” to see DNS Server log errors.</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WindowsDhcp({ servers }: { servers: WinDhcpServer[] }) {
   return (
-    <Panel title={`Windows DHCP · ${servers.length} server${servers.length > 1 ? "s" : ""}`} icon={<Server size={15} />}>
+    <Panel title={`Windows DHCP & DNS · ${servers.length} server${servers.length > 1 ? "s" : ""}`} icon={<Server size={15} />}>
       <div className="grid gap-4 xl:grid-cols-2">
         {servers.map((s) => (
           <div key={s.device_id} className={clsx("rounded-xl border bg-black/20 p-4", s.stale ? "border-warn/40" : "border-edge")}>
@@ -103,6 +142,7 @@ function WindowsDhcp({ servers }: { servers: WinDhcpServer[] }) {
                 {!f.partner_monitored && <span className="text-warn">partner not monitored - add it to check drift</span>}
               </div>
             ))}
+            {s.dns && <DnsRow d={s.dns} />}
             <div className="mt-3 space-y-2">
               {s.scopes.map((sc) => (
                 <div key={sc.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">

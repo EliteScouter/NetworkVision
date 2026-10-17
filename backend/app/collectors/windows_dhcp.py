@@ -1,4 +1,4 @@
-"""Windows Server DHCP collector (read-only, over WinRM / PowerShell Remoting).
+"""Windows Server DHCP + DNS collector (read-only, over WinRM / PowerShell Remoting).
 
 One PowerShell script per refresh reads scopes, scope statistics, options, exclusions,
 reservations, leases, failover relationships and server settings from the DhcpServer
@@ -6,8 +6,13 @@ module and returns JSON. Leases feed the normal DHCP insights (conflicts, new de
 the rest powers the Windows-specific checks in services/windhcp.py (failover health,
 configuration drift between partners, scope exhaustion, BAD_ADDRESS, static IPs in pools).
 
+DNS: the server is also queried directly over DNS (collectors/dns_probe.py: AD locator records,
+external resolution, lease <-> A/PTR consistency). Zones, forwarders and scavenging are read
+when the account is allowed to; the DNS Server event log needs **Event Log Readers**.
+
 Least privilege: a plain domain account in the **DHCP Users** group (read-only DHCP) and
-**Remote Management Users** (WinRM) on each server. Never a domain admin.
+**Remote Management Users** (WinRM) on each server. Never a domain admin, and not DnsAdmins
+(that group can take over the domain).
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import time
 from typing import Any
 
 from ..services.clients import from_lease
+from . import dns_probe
 from .base import Collector, CollectorError, FieldSpec, Section, Snapshot, norm_mac
 
 ACTIVE_STATES = {"active", "activereservation"}
@@ -67,6 +73,25 @@ foreach ($s in Get-DhcpServerv4Scope) {
 }
 $out.scopes = $scopes.ToArray()
 $out.leases = $leases.ToArray()
+$dns = [ordered]@{ available = $false }
+if (Get-Module -ListAvailable -Name DnsServer) {
+  $dns.available = $true
+  try {
+    $dns.zones = @(Get-DnsServerZone | Where-Object { -not $_.IsAutoCreated -and $_.ZoneName -ne 'TrustAnchors' } | ForEach-Object {
+      [ordered]@{ name = "$($_.ZoneName)"; type = "$($_.ZoneType)"; ad = [bool]$_.IsDsIntegrated
+        reverse = [bool]$_.IsReverseLookupZone; dynamic = "$($_.DynamicUpdate)"; paused = [bool]$_.IsPaused } })
+    $dns.forwarders = @((Get-DnsServerForwarder).IPAddress | ForEach-Object { "$_" })
+    $dns.scavenging = [bool](Get-DnsServerScavenging).ScavengingState
+  } catch { $dns.config_error = "$($_.Exception.Message)" }
+}
+try {
+  $since = (Get-Date).AddHours(-24)
+  $dns.events = @(Get-WinEvent -FilterHashtable @{ LogName = 'DNS Server'; Level = 2, 3; StartTime = $since } -MaxEvents 25 |
+    ForEach-Object { [ordered]@{ id = [int]$_.Id; level = [int]$_.Level; ts = (U $_.TimeCreated); msg = "$((($_.Message) -split "`r?`n")[0])" } })
+} catch {
+  if ("$($_.FullyQualifiedErrorId)" -like 'NoMatchingEventsFound*') { $dns.events = @() } else { $dns.events_error = "$($_.Exception.Message)" }
+}
+$out.dns = $dns
 $out | ConvertTo-Json -Depth 6 -Compress
 """
 
@@ -111,7 +136,22 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
                  "state": str(f.get("state") or ""), "role": str(f.get("role") or ""), "lb": f.get("lb"),
                  "reserve": f.get("reserve"), "scopes": sorted(str(x) for x in _list(f.get("scopes")))}
                 for f in _list(raw.get("failover")) if isinstance(f, dict) and f.get("name")]
+    d = raw.get("dns") if isinstance(raw.get("dns"), dict) else {}
+    dns = {
+        "available": bool(d.get("available")),
+        "zones": [{"name": str(z.get("name") or ""), "type": str(z.get("type") or ""), "ad": bool(z.get("ad")),
+                   "reverse": bool(z.get("reverse")), "dynamic": str(z.get("dynamic") or ""), "paused": bool(z.get("paused"))}
+                  for z in _list(d.get("zones")) if isinstance(z, dict)] if "zones" in d else None,
+        "forwarders": [str(x) for x in _list(d.get("forwarders"))] if "forwarders" in d else None,
+        "scavenging": d.get("scavenging"),
+        "config_error": str(d["config_error"])[:300] if d.get("config_error") else None,
+        "events": [{"id": int(e.get("id") or 0), "level": int(e.get("level") or 0), "ts": e.get("ts"),
+                    "msg": str(e.get("msg") or "")[:300]} for e in _list(d.get("events")) if isinstance(e, dict)]
+                  if "events" in d else None,
+        "events_error": str(d["events_error"])[:300] if d.get("events_error") else None,
+    }
     return {
+        "dns": dns,
         "server": str(raw.get("server") or ""), "fqdn": str(raw.get("fqdn") or raw.get("server") or ""),
         "authorized": raw.get("authorized"), "conflict_attempts": raw.get("conflict_attempts"),
         "server_options": _opts(raw.get("server_options")), "failover": failover, "scopes": scopes,
@@ -130,7 +170,7 @@ def build_snapshot(data: dict[str, Any]) -> Snapshot:
                                f"scope {le['scope']}", le["expires"]) for le in good if le["mac"]]
     by_scope_fo = {sc: f["name"] for f in data["failover"] for sc in f["scopes"]}
     snap.dhcp_server = {
-        **{k: data[k] for k in ("server", "fqdn", "authorized", "conflict_attempts", "server_options", "failover", "truncated")},
+        **{k: data[k] for k in ("server", "fqdn", "authorized", "conflict_attempts", "server_options", "failover", "truncated", "dns")},
         "scopes": [{**s, "failover": by_scope_fo.get(s["id"], "")} for s in data["scopes"]],
         "bad": [{"ip": le["ip"], "scope": le["scope"]} for le in leases if is_bad_address(le)],
         "pairs": [[le["mac"], le["ip"]] for le in active if le["mac"]],
@@ -152,10 +192,10 @@ def build_snapshot(data: dict[str, Any]) -> Snapshot:
 
 class WindowsDhcpCollector(Collector):
     kind = "windows_dhcp"
-    label = "Windows Server DHCP (WinRM)"
+    label = "Windows Server DHCP & DNS (WinRM)"
     vendor = "Microsoft"
     description = (
-        "Scopes, leases, reservations and failover health from Windows Server DHCP over WinRM (read-only). "
+        "Scopes, leases, reservations and failover health from Windows Server DHCP, plus DNS health, over WinRM (read-only). "
         "Add each failover partner (e.g. DC01 and DC02) to compare their configuration and catch drift."
     )
     default_role = "server"
@@ -170,6 +210,13 @@ class WindowsDhcpCollector(Collector):
         FieldSpec(key="password", label="Password", type="password", secret=True, required=True, placeholder="env:WINDHCP_PASSWORD"),
         FieldSpec(key="verify_tls", label="Verify TLS certificate", type="bool", default=False,
                   help="Turn on if the WinRM certificate comes from a CA the container trusts."),
+        FieldSpec(key="dns_checks", label="Check DNS on this server", type="bool", default=True,
+                  help="Query it directly: AD locator records, external resolution, and whether DHCP clients' A/PTR records match their leases."),
+        FieldSpec(key="dns_domain", label="AD / DNS domain", type="text", placeholder="detected from the server name",
+                  help="e.g. corp.example.com. Short lease hostnames are checked as <host>.<domain>."),
+        FieldSpec(key="dns_test_name", label="External test name", type="text", default="cloudflare.com",
+                  help="Resolved through this server to confirm forwarders / root hints work. Empty to skip."),
+        FieldSpec(key="dns_lease_checks", label="Lease names to verify", type="number", default=300),
         FieldSpec(key="refresh", label="Refresh every (s)", type="number", default=60,
                   help="Full read of scopes and leases; between refreshes the last result is reused."),
         FieldSpec(key="max_leases", label="Max leases read", type="number", default=10000),
@@ -228,6 +275,17 @@ class WindowsDhcpCollector(Collector):
         if self._last is not None and time.monotonic() - self._last_at < refresh:
             return copy.deepcopy(self._last)
         raw = await asyncio.to_thread(self._run)
-        snap = build_snapshot(normalize(raw))
+        data = normalize(raw)
+        if self.opt("dns_checks") not in (False, "false", "0", 0):
+            fqdn = data["fqdn"].lower()
+            domain = str(self.opt("dns_domain") or (fqdn.split(".", 1)[1] if "." in fqdn else "")).strip(". ").lower()
+            active = [le for le in data["leases"] if le["state"].lower() in ACTIVE_STATES and not is_bad_address(le)]
+            try:
+                data["dns"]["probe"] = await dns_probe.probe(
+                    self.host, domain, fqdn, str(self.opt("dns_test_name") or "").strip(), active,
+                    limit=max(0, min(5000, int(self.opt("dns_lease_checks") or 0))))
+            except Exception as e:  # noqa: BLE001 - DNS checks must never break the DHCP data
+                data["dns"]["probe"] = {"ok": False, "error": f"DNS check failed: {type(e).__name__}"}
+        snap = build_snapshot(data)
         self._last, self._last_at = snap, time.monotonic()
         return copy.deepcopy(snap)
