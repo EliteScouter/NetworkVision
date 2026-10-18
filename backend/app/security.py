@@ -113,16 +113,51 @@ def mask_secrets(data: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Passwords & sessions
 # --------------------------------------------------------------------------- #
+# Admin account created in the first-run setup page (settings table, key "admin").
+# Env credentials (NV_ADMIN_PASSWORD / NV_ADMIN_PASSWORD_HASH) always take precedence.
+_stored_admin: dict[str, str] | None = None
+
+
+def set_stored_admin(account: dict[str, str] | None) -> None:
+    global _stored_admin
+    _stored_admin = account
+
+
+def env_admin_configured() -> bool:
+    s = get_settings()
+    return bool(s.admin_password or s.admin_password_hash)
+
+
+def admin_password_configured() -> bool:
+    return env_admin_configured() or bool(_stored_admin)
+
+
+def admin_username() -> str:
+    if not env_admin_configured() and _stored_admin:
+        return _stored_admin["username"]
+    return get_settings().admin_username
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _check_hash(password: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except ValueError:
+        return False
+
+
 def verify_admin(username: str, password: str) -> bool:
     s = get_settings()
-    user_ok = hmac.compare_digest(username.encode(), s.admin_username.encode())
+    user_ok = hmac.compare_digest(username.encode(), admin_username().encode())
     if s.admin_password_hash:
-        try:
-            pw_ok = bcrypt.checkpw(password.encode(), s.admin_password_hash.encode())
-        except ValueError:
-            pw_ok = False
+        pw_ok = _check_hash(password, s.admin_password_hash)
     elif s.admin_password:
         pw_ok = hmac.compare_digest(password.encode(), s.admin_password.encode())
+    elif _stored_admin:
+        pw_ok = _check_hash(password, _stored_admin["hash"])
     else:
         pw_ok = False  # no password configured -> nobody gets in
     return user_ok and pw_ok
@@ -130,7 +165,12 @@ def verify_admin(username: str, password: str) -> bool:
 
 def auth_configured() -> bool:
     s = get_settings()
-    return s.auth_disabled or bool(s.admin_password or s.admin_password_hash or s.trusted_proxy_header)
+    return s.auth_disabled or bool(s.trusted_proxy_header) or admin_password_configured()
+
+
+def setup_required() -> bool:
+    """True until an admin exists (env or first-run page): the UI then shows the setup page."""
+    return not auth_configured()
 
 
 class SecretError(Exception):

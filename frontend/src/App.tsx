@@ -12,6 +12,7 @@ import DevicesPage from "./pages/Devices";
 import DhcpPage from "./pages/Dhcp";
 import IntegrationsPage from "./pages/Integrations";
 import LoginPage from "./pages/Login";
+import SetupPage from "./pages/Setup";
 import FirewallPage from "./pages/Firewall";
 import LogsPage from "./pages/Logs";
 import OverviewPage from "./pages/Overview";
@@ -22,7 +23,7 @@ import SpeedtestPage from "./pages/Speedtest";
 import TopologyPage from "./pages/Topology";
 import WifiPage from "./pages/Wifi";
 
-type Me = { user: string | null; auth_disabled: boolean; configured: boolean };
+type Me = { user: string | null; auth_disabled: boolean; configured: boolean; setup_required?: boolean };
 
 function Authed({ me }: { me: Me }) {
   const [meta, setMeta] = useState<Meta | null>(null);
@@ -77,12 +78,21 @@ export default function App() {
       </div>
     );
   }
+  if (me.setup_required) {
+    return (
+      <Routes>
+        <Route path="/setup" element={<SetupPage onDone={refresh} />} />
+        <Route path="*" element={<Navigate to="/setup" replace />} />
+      </Routes>
+    );
+  }
   return (
     <Routes>
       <Route
         path="/login"
         element={me.user ? <Navigate to="/" replace /> : <LoginPage configured={me.configured} onLogin={refresh} />}
       />
+      <Route path="/setup" element={<Navigate to="/" replace />} />
       <Route path="/*" element={me.user ? <Authed me={me} /> : <Navigate to="/login" replace />} />
     </Routes>
   );

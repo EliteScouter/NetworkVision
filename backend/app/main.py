@@ -26,6 +26,7 @@ from .config import get_settings
 from .db import dispose, init_db
 from .security import auth_configured, require_user
 from .services import notifier, syslog
+from .services.account import account
 from .services.bus import bus
 from .services.dhcp import dhcp
 from .services.firewall import firewall
@@ -53,9 +54,10 @@ async def lifespan(_: FastAPI):
     log = logging.getLogger("networkvision")
     s = get_settings()
     log.info("NetworkVision %s starting (demo=%s)", __version__, s.demo_mode)
-    if not auth_configured():
-        log.warning("No admin password set (NV_ADMIN_PASSWORD / NV_ADMIN_PASSWORD_HASH) - logins are impossible")
     await init_db()
+    await account.load()
+    if not auth_configured():
+        log.warning("No admin account yet - open the dashboard in a browser to create one (first-run setup)")
     await mfa.load()
     await runtime.load()
     if keepass.configured:
