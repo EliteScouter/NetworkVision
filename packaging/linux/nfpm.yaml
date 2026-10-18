@@ -1,0 +1,43 @@
+# nfpm config for the .deb and .rpm (https://nfpm.goreleaser.com). Driven by build.sh,
+# which stages the self-contained runtime in /opt/networkvision first.
+name: networkvision
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${NFPM_VERSION}
+version_schema: semver
+section: net
+priority: optional
+maintainer: NetworkVision maintainers <noreply@github.com>
+description: |
+  Real-time network monitoring dashboard for homelabs and small NOCs.
+  Self-contained: bundles its own Python runtime and web UI. Runs as the
+  networkvision systemd service; browse to http://<host>:8080/ after install.
+vendor: NetworkVision
+homepage: https://github.com/EliteScouter/NetworkVision
+license: MIT
+
+contents:
+  - src: /opt/networkvision
+    dst: /opt/networkvision
+    type: tree
+  - src: ./networkvision.service
+    dst: /usr/lib/systemd/system/networkvision.service
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./postinstall.sh
+  preremove: ./preremove.sh
+  postremove: ./postremove.sh
+
+overrides:
+  deb:
+    depends: [passwd]
+  rpm:
+    depends: [shadow-utils, systemd]
+
+deb:
+  compression: xz
+rpm:
+  compression: xz
+  group: Applications/System

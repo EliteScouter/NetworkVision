@@ -7,13 +7,17 @@ from ..config import get_settings
 from ..security import (
     COOKIE_NAME,
     _user_from,
+    admin_password_configured,
+    admin_username,
     auth_configured,
     decode_token,
     issue_token,
     login_limiter,
     require_user,
+    setup_required,
     verify_admin,
 )
+from ..services.account import SetupLocked, account
 from ..services.mfa import mfa
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -23,6 +27,11 @@ MFA_TOKEN_TTL = 300  # seconds to type the code after the password step
 class LoginIn(BaseModel):
     username: str
     password: str
+
+
+class SetupIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._@-]+$")
+    password: str = Field(min_length=8, max_length=256)
 
 
 class MfaLoginIn(BaseModel):
@@ -53,12 +62,11 @@ def _set_session(response: Response, username: str) -> None:
 
 @router.post("/login")
 async def login(body: LoginIn, request: Request, response: Response) -> dict:
-    s = get_settings()
     client = _client(request)
     login_limiter.check(client)
-    if not (s.admin_password or s.admin_password_hash):
+    if not admin_password_configured():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "No admin password configured. Set NV_ADMIN_PASSWORD or NV_ADMIN_PASSWORD_HASH.")
+                            "No admin account yet. Create one on the setup page, or set NV_ADMIN_PASSWORD(_HASH).")
     if not verify_admin(body.username, body.password):
         login_limiter.fail(client)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
@@ -66,6 +74,20 @@ async def login(body: LoginIn, request: Request, response: Response) -> dict:
         # Password OK, but no session yet: hand out a short-lived token that only /mfa accepts.
         return {"mfa_required": True, "mfa_token": issue_token(body.username, purpose="mfa", ttl=MFA_TOKEN_TTL)}
     login_limiter.reset(client)
+    _set_session(response, body.username)
+    return {"user": body.username}
+
+
+@router.post("/setup")
+async def setup(body: SetupIn, request: Request, response: Response) -> dict:
+    """First-run only: create the admin account and sign in. Locked once any admin exists."""
+    login_limiter.check(_client(request))
+    if not setup_required():
+        raise HTTPException(status.HTTP_409_CONFLICT, "Setup is already complete - sign in instead")
+    try:
+        await account.create(body.username, body.password)
+    except SetupLocked as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Setup is already complete - sign in instead") from e
     _set_session(response, body.username)
     return {"user": body.username}
 
@@ -98,6 +120,7 @@ async def me(request: Request) -> dict:
         "user": _user_from(request.headers, request.cookies),
         "auth_disabled": s.auth_disabled,
         "configured": auth_configured(),
+        "setup_required": setup_required(),
         "mfa_enabled": mfa.enabled,
         "sso": bool(s.trusted_proxy_header) or s.auth_disabled,
     }
@@ -109,7 +132,7 @@ async def me(request: Request) -> dict:
 def _reauth(user: str, body: ReauthIn, request: Request) -> None:
     client = _client(request)
     login_limiter.check(client)
-    if not verify_admin(get_settings().admin_username, body.password):
+    if not verify_admin(admin_username(), body.password):
         login_limiter.fail(client)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Password is incorrect")
 
@@ -124,7 +147,7 @@ async def mfa_setup(user: str = Depends(require_user)) -> dict:
     if mfa.status()["source"] == "database":
         raise HTTPException(status.HTTP_409_CONFLICT, "MFA is already enabled - disable it first to re-enroll")
     try:
-        return await mfa.begin_setup(get_settings().admin_username)
+        return await mfa.begin_setup(admin_username())
     except ValueError as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
 

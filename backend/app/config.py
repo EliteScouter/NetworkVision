@@ -1,8 +1,13 @@
-"""Runtime configuration.
+r"""Runtime configuration.
 
-Every setting is read from environment variables (or a local ``.env`` file in
-development). Nothing secret is ever hard-coded or committed; see
-``.env.example`` at the repository root for the full, documented list.
+Every setting is read from environment variables, then from a config file, then
+from a local ``.env`` file (development). Nothing secret is ever hard-coded or
+committed; see ``.env.example`` at the repository root for the full list.
+
+The config file is ``NV_CONFIG`` if set, else the per-OS default written by the
+native packages (``/etc/networkvision/networkvision.env`` on Linux,
+``%ProgramData%\NetworkVision\networkvision.env`` on Windows). Docker users keep
+using plain environment variables.
 """
 
 from __future__ import annotations
@@ -10,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import sys
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -20,10 +26,40 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 log = logging.getLogger("networkvision.config")
 
 
+def _windows_programdata() -> Path:
+    return Path(os.environ.get("ProgramData") or r"C:\ProgramData") / "NetworkVision"
+
+
+def default_config_file() -> Path:
+    """Where the native packages put the config file (it may not exist)."""
+    if os.environ.get("NV_CONFIG"):
+        return Path(os.environ["NV_CONFIG"])
+    if sys.platform == "win32":
+        return _windows_programdata() / "networkvision.env"
+    return Path("/etc/networkvision/networkvision.env")
+
+
+def default_data_dir() -> str:
+    """The OS data dir when a package created it, else ./data (source checkouts, tests)."""
+    os_dir = _windows_programdata() / "data" if sys.platform == "win32" else Path("/var/lib/networkvision")
+    return str(os_dir) if os_dir.is_dir() else "./data"
+
+
+def env_files() -> tuple[str, ...]:
+    """Env files in increasing precedence; real environment variables beat all of them."""
+    files = [".env", "../.env"]
+    cfg = default_config_file()
+    if cfg.is_file() and os.access(cfg, os.R_OK):
+        files.append(str(cfg))
+    elif os.environ.get("NV_CONFIG"):
+        log.warning("NV_CONFIG=%s is not a readable file - ignoring it", cfg)
+    return tuple(files)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="NV_",
-        env_file=(".env", "../.env"),
+        env_file=(".env", "../.env"),  # get_settings() adds the config file, see env_files()
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -33,7 +69,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     host: str = "0.0.0.0"
     port: int = 8080
-    data_dir: str = "./data"
+    data_dir: str = Field(default_factory=default_data_dir)
     static_dir: str = "./static"
     demo_mode: bool = False
 
@@ -155,28 +191,50 @@ class Settings(BaseSettings):
 
 
 @lru_cache
+def config_file_values() -> dict[str, str]:
+    """Raw KEY=value pairs of the config file, for env:NAME device-secret references.
+
+    Native installs keep device secrets in the config file instead of the process
+    environment, so env:PFSENSE_API_KEY must find them there too.
+    """
+    from dotenv import dotenv_values
+
+    cfg = default_config_file()
+    if not (cfg.is_file() and os.access(cfg, os.R_OK)):
+        return {}
+    return {k: v for k, v in dotenv_values(cfg).items() if v is not None}
+
+
+@lru_cache
 def get_settings() -> Settings:
-    s = Settings()
+    s = Settings(_env_file=env_files())
     if not s.secret_key:
         s.secret_key = _load_or_create_secret(s.data_dir)
     return s
 
 
 def _load_or_create_secret(data_dir: str) -> str:
-    """Fallback when NV_SECRET_KEY is unset: persist a random key in the data volume.
+    """Fallback when NV_SECRET_KEY is unset: persist a random key in the data dir.
 
-    The key never leaves the container's data directory, so it is never committed,
-    but operators should still prefer an explicit NV_SECRET_KEY they can back up.
+    The file is created owner-only (0600) and reused on every later start. The key
+    never leaves the data directory, so it is never committed, but it must be backed
+    up together with the database: it encrypts stored device credentials.
     """
     path = Path(data_dir) / ".secret_key"
     try:
         if path.exists():
-            return path.read_text(encoding="utf-8").strip()
+            key = path.read_text(encoding="utf-8").strip()
+            if key:
+                return key
+            log.warning("%s is empty - generating a new key", path)
         path.parent.mkdir(parents=True, exist_ok=True)
         key = secrets.token_urlsafe(48)
-        path.write_text(key, encoding="utf-8")
+        # Create with 0600 from the start (no window where the key is world-readable).
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key)
         try:
-            os.chmod(path, 0o600)
+            os.chmod(path, 0o600)  # also tighten a pre-existing empty file
         except OSError:
             pass
         log.warning(
