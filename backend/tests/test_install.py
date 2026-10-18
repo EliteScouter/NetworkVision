@@ -28,6 +28,23 @@ def test_missing_config_file_is_ignored(tmp_path, monkeypatch):
     assert config.env_files() == (".env", "../.env")
 
 
+def test_env_references_resolve_from_config_file(tmp_path, monkeypatch):
+    from app.security import resolve_secret
+
+    cfg = tmp_path / "networkvision.env"
+    cfg.write_text("PFSENSE_API_KEY=from-file\nNV_SECRET_KEY=never-exposed\nBOTH=file\n", encoding="utf-8")
+    monkeypatch.setenv("NV_CONFIG", str(cfg))
+    monkeypatch.setenv("BOTH", "env")
+    config.config_file_values.cache_clear()
+    try:
+        assert resolve_secret("env:PFSENSE_API_KEY") == "from-file"
+        assert resolve_secret("env:BOTH") == "env"
+        assert resolve_secret("env:NV_SECRET_KEY") == ""  # NetworkVision's own settings stay off-limits
+        assert resolve_secret("env:MISSING") == ""
+    finally:
+        config.config_file_values.cache_clear()
+
+
 @pytest.mark.parametrize("platform", ["linux", "win32"])
 def test_default_paths_per_os(tmp_path, monkeypatch, platform):
     monkeypatch.delenv("NV_CONFIG", raising=False)

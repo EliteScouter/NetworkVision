@@ -1,0 +1,21 @@
+<!-- WinSW (https://github.com/winsw/winsw) service definition. Lives next to
+     NetworkVisionService.exe (a renamed WinSW-x64.exe) in the install folder. -->
+<service>
+  <id>NetworkVision</id>
+  <name>NetworkVision</name>
+  <description>NetworkVision network monitoring dashboard. Settings: %ProgramData%\NetworkVision\networkvision.env</description>
+  <executable>%BASE%\networkvision.exe</executable>
+  <workingdirectory>%ProgramData%\NetworkVision</workingdirectory>
+  <env name="NV_STATIC_DIR" value="%BASE%\static" />
+  <env name="PYTHONUNBUFFERED" value="1" />
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+  <logpath>%ProgramData%\NetworkVision\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>

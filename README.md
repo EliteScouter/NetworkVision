@@ -47,15 +47,74 @@ something goes wrong. It ships as a single Docker container that drops straight 
 ## Quick start (Portainer)
 
 1. **Stacks → Add stack**, then paste [`docker-compose.yml`](docker-compose.yml) or use *Repository* and point it at this repo.
-2. Under **Environment variables**, set at least:
+2. Under **Environment variables**, set (recommended):
    ```
    NV_SECRET_KEY=<output of: openssl rand -base64 48>
    NV_ADMIN_PASSWORD=<a strong password>
    ```
+   Both are optional: without `NV_SECRET_KEY` a key is generated into the `/data` volume (`.secret_key`, back it
+   up), and without an admin password the first visit shows a **Create your admin account** page.
    Want to look around first? Add `NV_DEMO_MODE=true`.
 3. Deploy, then open `http://<docker-host>:8080`.
 4. Go to **Integrations → Add integration** and connect your gear. Hit **Test connection** before saving.
 5. Point every device's remote syslog at `<docker-host>:514`. The *Syslog setup* tab has per-vendor instructions.
+
+## Install without Docker
+
+Docker is the primary, best-tested way to run NetworkVision. If you'd rather not use it, every
+[GitHub Release](https://github.com/EliteScouter/NetworkVision/releases) also ships native packages. They are
+self-contained (bundled Python runtime and web UI, nothing else to install). After installing, open
+`http://<host>:8080/`, create the admin account on the setup page, and you're offered two-factor setup next.
+
+### Debian / Ubuntu (.deb) and RHEL / Rocky / Alma / Fedora (.rpm)
+
+amd64 and arm64, systemd-based distros with glibc 2.28+ (Debian 11+, Ubuntu 20.04+, RHEL 8+).
+
+```bash
+sudo apt install ./networkvision_<version>_amd64.deb
+```
+
+```bash
+sudo dnf install ./networkvision-<version>-1.x86_64.rpm
+```
+
+- Runs as the `networkvision` systemd service under an unprivileged `networkvision` user, with only
+  `CAP_NET_BIND_SERVICE` (syslog on the standard port **514**) and `CAP_NET_RAW` (ICMP ping).
+- Config: `/etc/networkvision/networkvision.env` (same `NV_*` options as Docker, kept on upgrade), then
+  `sudo systemctl restart networkvision`. Data: `/var/lib/networkvision`. Logs: `journalctl -u networkvision`.
+- The package does not touch your firewall: open TCP 8080 and UDP/TCP 514 if you use `ufw` or `firewalld`.
+- `apt remove` keeps data and config; `apt purge` deletes them. On RPM systems delete `/var/lib/networkvision`
+  and `/etc/networkvision` yourself after `dnf remove`.
+
+### Windows (installer)
+
+Download `NetworkVision-<version>-windows-x64-setup.exe` (Windows 10/11, Server 2019+) and run it.
+
+- It asks for the web port (default 8080), installs the **NetworkVision** Windows service (starts automatically),
+  opens Windows Firewall for the web port and syslog (UDP/TCP 514), and opens the setup page in your browser.
+- Config: `%ProgramData%\NetworkVision\networkvision.env`, then `Restart-Service NetworkVision`.
+  Data: `%ProgramData%\NetworkVision\data`; service logs: `%ProgramData%\NetworkVision\logs`. The folder is
+  readable only by SYSTEM and Administrators.
+- Unattended install: `NetworkVision-<version>-windows-x64-setup.exe /VERYSILENT /PORT=8080`.
+- Uninstalling (Settings > Apps) removes the service and firewall rules but keeps `%ProgramData%\NetworkVision`.
+- **SmartScreen:** the installer is only code-signed when the maintainers have a certificate configured. If it
+  isn't, Windows says "Windows protected your PC": check the file against `SHA256SUMS-packages.txt` on the release
+  page (`Get-FileHash .\NetworkVision-*-setup.exe`), then click **More info > Run anyway**.
+
+### Native install notes
+
+- The admin account created on the setup page is stored (bcrypt hash) in the database. `NV_ADMIN_PASSWORD` (or
+  `NV_ADMIN_PASSWORD_HASH`) in the config file takes precedence over it, which is also how you get back in if you
+  forget that password.
+- The setup page is open to whoever reaches it first, so finish setup right after installing (the installers point
+  you at it) before exposing the port.
+- `NV_SECRET_KEY` is generated into the data directory on first start (`.secret_key`, owner-only). Back it up with
+  the database: stored device credentials are encrypted with it.
+- Device secrets entered as `env:NAME` are also read from the config file, so `PFSENSE_API_KEY=...` can live there.
+- Building the packages yourself: `packaging/linux/build.sh <version>` (needs nfpm) and
+  `packaging/windows/build.ps1 -Version <version>` (needs PyInstaller and Inno Setup 6), after `npm run build` in
+  `frontend/`. Set `NV_SIGN_PFX` / `NV_SIGN_PFX_PASSWORD` to sign the Windows binaries; in CI those come from the
+  optional `WINDOWS_SIGNING_PFX_BASE64` / `WINDOWS_SIGNING_PFX_PASSWORD` secrets, and signing is skipped without them.
 
 ### Keeping secrets out of the database
 
@@ -200,12 +259,15 @@ devices you recognize as **Known** on the *DHCP* page. "New device" alerts start
 ## Configuration
 
 Everything is configured with `NV_*` environment variables. See [`.env.example`](.env.example) for the full,
-documented list: auth, database, retention, alert thresholds and notifications.
+documented list: auth, database, retention, alert thresholds and notifications. Native installs read the same
+options from a config file: `NV_CONFIG` if set, else `/etc/networkvision/networkvision.env` (Linux) or
+`%ProgramData%\NetworkVision\networkvision.env` (Windows). Environment variables override the file.
 
 | Variable | Default | |
 |---|---|---|
-| `NV_SECRET_KEY` | *(required)* | Signs sessions, encrypts stored credentials |
-| `NV_ADMIN_PASSWORD` / `NV_ADMIN_PASSWORD_HASH` | | Dashboard login (bcrypt hash preferred) |
+| `NV_SECRET_KEY` | *(generated)* | Signs sessions, encrypts stored credentials. Unset: generated into `<data dir>/.secret_key` |
+| `NV_ADMIN_PASSWORD` / `NV_ADMIN_PASSWORD_HASH` | | Dashboard login (bcrypt hash preferred). Unset: create the admin on the first-run setup page |
+| `NV_DATA_DIR` | `/data` (Docker) | Native: `/var/lib/networkvision` or `%ProgramData%\NetworkVision\data` |
 | `NV_COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
 | `NV_TRUSTED_PROXY_HEADER` | | e.g. `Remote-User` for Authelia/Authentik forward-auth |
 | `NV_POLL_INTERVAL` | `15` | Seconds between polls |

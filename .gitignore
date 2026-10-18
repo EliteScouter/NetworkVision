@@ -13,6 +13,11 @@ data/
 *.sqlite
 *.sqlite3
 
+# --- Native package builds ---------------------------------------------------
+dist/
+build/
+backend/app/_build_version.py
+
 # --- Python ------------------------------------------------------------------
 __pycache__/
 *.py[cod]

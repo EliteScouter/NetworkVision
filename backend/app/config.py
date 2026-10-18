@@ -191,6 +191,21 @@ class Settings(BaseSettings):
 
 
 @lru_cache
+def config_file_values() -> dict[str, str]:
+    """Raw KEY=value pairs of the config file, for env:NAME device-secret references.
+
+    Native installs keep device secrets in the config file instead of the process
+    environment, so env:PFSENSE_API_KEY must find them there too.
+    """
+    from dotenv import dotenv_values
+
+    cfg = default_config_file()
+    if not (cfg.is_file() and os.access(cfg, os.R_OK)):
+        return {}
+    return {k: v for k, v in dotenv_values(cfg).items() if v is not None}
+
+
+@lru_cache
 def get_settings() -> Settings:
     s = Settings(_env_file=env_files())
     if not s.secret_key:

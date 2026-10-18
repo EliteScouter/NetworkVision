@@ -95,7 +95,11 @@ def resolve_secret(value: Any) -> Any:
         # Never let a device config exfiltrate NetworkVision's own secrets (NV_SECRET_KEY, DB password...).
         if not name or name.upper().startswith("NV_"):
             return ""
-        return os.environ.get(name, "")
+        if name in os.environ:
+            return os.environ[name]
+        from .config import config_file_values
+
+        return config_file_values().get(name, "")
     return value
 
 
