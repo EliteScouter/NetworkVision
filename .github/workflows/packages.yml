@@ -89,8 +89,8 @@ jobs:
           curl -fsS http://127.0.0.1:8080/ | grep -qi '<div id="root"'
           sudo ss -lunp | grep -q ':514 '   # syslog bound to 514 as an unprivileged user
           ps -eo user:20,args | grep "[p]ython -m app" | grep -q '^networkvision '
-          sudo test "$(stat -c '%a %U' /var/lib/networkvision/.secret_key)" = "600 networkvision"
-          sudo test "$(stat -c '%a %U:%G' /etc/networkvision/networkvision.env)" = "640 root:networkvision"
+          test "$(sudo stat -c '%a %U' /var/lib/networkvision/.secret_key)" = "600 networkvision"
+          test "$(sudo stat -c '%a %U:%G' /etc/networkvision/networkvision.env)" = "640 root:networkvision"
           curl -fsS -X POST -H 'content-type: application/json' -d '{"username":"admin","password":"ci-only-password"}' \
             http://127.0.0.1:8080/api/auth/setup | grep -q '"user":"admin"'
           curl -fsS http://127.0.0.1:8080/api/auth/me | grep -q '"setup_required":false'
