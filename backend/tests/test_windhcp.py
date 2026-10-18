@@ -56,6 +56,10 @@ def test_normalize_and_snapshot():
     assert set(macs) == {"11:22:33:44:55:66", "aa:bb:cc:00:00:01"}  # BAD_ADDRESS isn't a client
     assert macs["aa:bb:cc:00:00:01"]["online"] is False  # a reservation isn't proof the device is online
     assert macs["aa:bb:cc:00:00:01"]["lease"]["state"] == "reserved"
+    raw = _raw("DC01", leases=[{"ip": "10.0.20.140", "mac": "00-15-5d-02-09-06", "host": "", "state": "InactiveReservation",
+                                "scope": "10.0.20.0", "expires": None}])
+    old_vm = build_snapshot(normalize(raw)).clients[0]
+    assert old_vm["lease"]["state"] == "reserved" and old_vm["online"] is False
     ds = snap.dhcp_server
     assert ds["bad"] == [{"ip": "10.0.20.130", "scope": "10.0.20.0"}]
     assert ds["scopes"][0]["failover"] == "DC01-DC02"

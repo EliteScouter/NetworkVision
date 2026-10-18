@@ -214,7 +214,8 @@ def build_snapshot(data: dict[str, Any]) -> Snapshot:
 
 def _lease_state(state: str) -> str:
     s = state.lower()
-    return "active" if s == "active" else "reserved" if s == "activereservation" else s
+    # Active/InactiveReservation are both just the reservation record, whatever the device is doing.
+    return "active" if s == "active" else "reserved" if "reservation" in s else s
 
 
 class WindowsDhcpCollector(Collector):
