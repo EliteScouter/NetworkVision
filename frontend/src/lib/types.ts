@@ -231,11 +231,12 @@ export interface Meta {
 
 // ----------------------------------------------------------------- settings
 export interface SettingField {
-  value: string | number;
+  value: string | number | boolean;
   /** The env var (or built-in) value that applies when the UI value is reset. */
-  default: string | number;
+  default: string | number | boolean;
   source: "default" | "env" | "ui";
   secret: boolean;
+  type: "bool" | "int" | "float" | "str" | "secret";
 }
 
 export interface SettingsData {

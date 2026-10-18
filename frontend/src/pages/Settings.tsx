@@ -1,11 +1,17 @@
 import clsx from "clsx";
 import {
   BellRing,
+  BrickWall,
   CalendarClock,
   Check,
   Database,
   Gauge,
+  Globe,
   ListChecks,
+  Network,
+  ScrollText,
+  ShieldAlert,
+  Timer,
   Plus,
   RotateCcw,
   Save,
@@ -25,8 +31,8 @@ import { useLive } from "../lib/store";
 import type { MaintenanceWindow, SettingsData } from "../lib/types";
 
 const MASK = "••••••••";
-type Tab = "alerts" | "retention" | "notifications" | "maintenance";
-type Draft = Record<string, string | number | null>;
+type Tab = "general" | "alerts" | "security" | "retention" | "notifications" | "maintenance";
+type Draft = Record<string, string | number | boolean | null>;
 
 const THRESHOLDS: [string, string, string, string][] = [
   ["alert_cpu_pct", "CPU", "%", "Device CPU at or above this"],
@@ -43,6 +49,8 @@ const RETENTION: [string, string, string][] = [
   ["retention_days_rollup", "Hourly rollups", "Long-range charts (30 days, a year). Minimum 7"],
   ["retention_days_logs", "Logs", "Syslog and API log lines"],
   ["retention_days_alerts", "Resolved alerts", "Alert history"],
+  ["retention_days_firewall", "Firewall events", "Individual firewall log rows (the Firewall page). Usually the biggest table"],
+  ["retention_days_security", "Security events", "Per-minute attack summaries (the Security page)"],
 ];
 const CHANNELS: [string, string, string][] = [
   ["notify_discord_webhook_url", "Discord webhook", "https://discord.com/api/webhooks/…"],
@@ -55,7 +63,7 @@ export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function SettingsPage() {
   const [params, setParams] = useSearchParams();
-  const tab = (params.get("tab") as Tab) || "alerts";
+  const tab = (params.get("tab") as Tab) || "general";
   const setTab = (t: Tab) => setParams({ tab: t }, { replace: true });
   const { data, setData, error } = useApi<SettingsData>("/settings");
   const [draft, setDraft] = useState<Draft>({});
@@ -68,15 +76,16 @@ export default function SettingsPage() {
     setSaving(true);
     setMsg(null);
     try {
-      const secret = (k: string) => data?.fields[k]?.secret;
+      const kind = (k: string) => data?.fields[k]?.type;
+      const numeric = (k: string) => kind(k) === "int" || kind(k) === "float";
       const values = Object.fromEntries(Object.entries(draft)
-        .filter(([k, v]) => secret(k) || v !== "")
-        .map(([k, v]) => [k, v === null || secret(k) || k === "notify_min_severity" ? v : Number(v)]));
+        .filter(([k, v]) => !numeric(k) || v !== "")
+        .map(([k, v]) => [k, v === null || !numeric(k) ? v : Number(v)]));
       const r = await api<SettingsData>("/settings", { method: "PUT", body: { values, disabled_rules: rules ?? undefined } });
       setData(r);
       setDraft({});
       setRules(null);
-      setMsg({ ok: true, text: "Saved - applies from the next poll" });
+      setMsg({ ok: true, text: "Saved - applied immediately" });
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {
@@ -89,7 +98,8 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-[1400px] space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-center gap-3">
         <Segmented value={tab} onChange={setTab} options={[
-          { value: "alerts", label: "Alert rules" }, { value: "retention", label: "Retention" },
+          { value: "general", label: "General" }, { value: "alerts", label: "Alert rules" },
+          { value: "security", label: "Firewall & security" }, { value: "retention", label: "Retention" },
           { value: "notifications", label: "Notifications" }, { value: "maintenance", label: "Maintenance" },
         ]} />
         <AnimatePresence>
@@ -150,13 +160,85 @@ export default function SettingsPage() {
 
       {data && tab === "retention" && (
         <Panel title="Data retention" icon={<Database size={15} />}>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {RETENTION.map(([name, label, help]) => (
               <SettingInput key={name} {...ctx} name={name} label={label} unit="days" help={help} integer />
             ))}
           </div>
           <p className="mt-4 text-xs text-faint">Cleanup runs hourly in small batches. Shortening retention frees space within the hour.</p>
         </Panel>
+      )}
+
+      {data && tab === "general" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="Polling" icon={<Timer size={15} />}>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <SettingInput {...ctx} name="poll_interval" label="Poll interval" unit="s" integer
+                help="How often devices are polled (per-device overrides on each integration). Minimum 5" />
+              <SettingInput {...ctx} name="metrics_persist_interval" label="Save metrics every" unit="s" integer
+                help="How often samples are written for charts. Minimum 15" />
+            </div>
+          </Panel>
+          <Panel title="Logging" icon={<ScrollText size={15} />} delay={0.05}>
+            <SelectSetting {...ctx} name="log_level" label="Container log level" options={["DEBUG", "INFO", "WARNING", "ERROR"]}
+              help="NetworkVision's own log output (docker logs), not the syslog it collects. Applies immediately." />
+          </Panel>
+          <Panel title="GeoIP" icon={<Globe size={15} />} delay={0.1} className="lg:col-span-2">
+            <div className="max-w-xl">
+              <SecretInput {...ctx} name="geoip_license_key" label="MaxMind license key" placeholder="40 characters, ends in _mmk" />
+            </div>
+            <p className="mt-3 text-xs text-faint">
+              Free GeoLite2 key from maxmind.com (Account › Manage License Keys). Saving a key downloads the country database right away
+              and refreshes it weekly. Stored encrypted.
+            </p>
+          </Panel>
+        </div>
+      )}
+
+      {data && tab === "security" && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="Firewall log storage" icon={<BrickWall size={15} />}>
+            <div className="space-y-3">
+              <BoolSetting {...ctx} name="firewall_enabled" label="Parse firewall logs"
+                help="pfSense / OPNsense filterlog lines feed the Firewall page and security detection" />
+              <BoolSetting {...ctx} name="firewall_store_pass" label="Store allowed (pass) events"
+                help="Off: passes are still counted on the timeline but not kept row by row" />
+              <BoolSetting {...ctx} name="firewall_store_noise" label="Store multicast / broadcast noise"
+                help="mDNS, IPv6 link-local and broadcast chatter. Off: counted, not stored (often 25%+ of rows)" />
+              <BoolSetting {...ctx} name="firewall_keep_raw_logs" label="Also keep raw filterlog lines in Logs"
+                help="Off: firewall lines live only on the Firewall page instead of being stored twice" />
+            </div>
+          </Panel>
+          <Panel title="Threat detection" icon={<ShieldAlert size={15} />} delay={0.05}>
+            <BoolSetting {...ctx} name="sec_enabled" label="Security detection" help="Brute force, port scans and WAN spikes" />
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <SettingInput {...ctx} name="sec_bruteforce_failures" label="Brute force: failures" integer help="Failed logins from one source…" />
+              <SettingInput {...ctx} name="sec_bruteforce_window_min" label="…within" unit="min" integer />
+              <SettingInput {...ctx} name="sec_scan_ports" label="Port scan: distinct ports" integer help="From one source…" />
+              <SettingInput {...ctx} name="sec_scan_hosts" label="…or distinct hosts" integer />
+              <SettingInput {...ctx} name="sec_scan_window_min" label="Scan window" unit="min" integer />
+              <SettingInput {...ctx} name="sec_wan_spike_factor" label="WAN spike: × baseline" unit="×" help="Blocked/min vs. rolling baseline…" />
+              <SettingInput {...ctx} name="sec_wan_spike_min" label="…and at least" unit="/min" integer />
+            </div>
+            <div className="mt-4 space-y-3">
+              <BoolSetting {...ctx} name="sec_scan_alert_blocked" label="Alert on scans the firewall already blocked"
+                help="Off: blocked internet scans are recorded but don't open alerts" />
+              <TextSetting {...ctx} name="sec_ignore_ips" label="Never treat as attackers" placeholder="10.0.0.5, 192.168.50.0/24"
+                help="Comma-separated IPs or CIDRs (your scanners, monitoring hosts…)" />
+            </div>
+          </Panel>
+          <Panel title="DHCP insights" icon={<Network size={15} />} delay={0.1} className="lg:col-span-2">
+            <BoolSetting {...ctx} name="dhcp_enabled" label="DHCP insights" help="Conflicts, new devices, address hopping, Windows DHCP checks" />
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <SettingInput {...ctx} name="dhcp_mac_max_ips" label="Address hopping" unit="IPs/24h" integer
+                help="Flag a device that used this many IPs in a day" />
+              <SettingInput {...ctx} name="dhcp_learning_hours" label="Learning period" unit="h"
+                help="No “new device” alerts until the baseline is built" />
+              <SettingInput {...ctx} name="dhcp_scope_warn_pct" label="Scope usage warning" unit="%" help="Windows DHCP scopes" />
+              <SettingInput {...ctx} name="dhcp_scope_crit_pct" label="Scope usage critical" unit="%" />
+            </div>
+          </Panel>
+        </div>
       )}
 
       {data && tab === "notifications" && <Notifications {...ctx} dirty={dirty} />}
@@ -182,7 +264,7 @@ function SettingInput({ data, draft, setDraft, name, label, unit, help, integer 
   const value = pending ? (draft[name] === null ? f.default : draft[name]) : f.value;
   const set = (v: string | null) => setDraft((d) => {
     const n = { ...d };
-    if (v !== null && v !== "" && +v === +f.value) delete n[name];
+    if (v !== null && v !== "" && +v === +(f.value as number)) delete n[name];
     else n[name] = v;
     return n;
   });
@@ -192,11 +274,90 @@ function SettingInput({ data, draft, setDraft, name, label, unit, help, integer 
       <div className="flex items-center gap-1.5">
         <div className="relative flex-1">
           <input className={clsx("input w-full pr-12", draft[name] === "" && "!border-crit/50")} type="number" min={0} step={integer ? 1 : "any"}
-            value={value ?? ""} onChange={(e) => set(e.target.value)} />
+            value={(value as string | number | null) ?? ""} onChange={(e) => set(e.target.value)} />
           {unit && <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 font-mono text-[11px] text-faint">{unit}</span>}
         </div>
         {(f.source === "ui" && draft[name] !== null) && (
           <button className="btn btn-ghost !p-2" title="Reset to the env/default value" onClick={() => set(null)}><RotateCcw size={14} /></button>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+function BoolSetting({ data, draft, setDraft, name, label, help }: Ctx & { name: string; label: string; help?: ReactNode }) {
+  const f = data!.fields[name];
+  const pending = name in draft;
+  const value = Boolean(pending ? (draft[name] === null ? f.default : draft[name]) : f.value);
+  const set = (v: boolean | null) => setDraft((d) => {
+    const n = { ...d };
+    if (v !== null && v === Boolean(f.value)) delete n[name];
+    else n[name] = v;
+    return n;
+  });
+  return (
+    <div className={clsx("flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 transition-colors",
+      value ? "border-cyan/20 bg-cyan/[0.03]" : "border-edge bg-black/20")}>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2 text-sm">{label}<SourceBadge source={f.source} pending={pending} /></div>
+        {help && <div className="mt-0.5 text-xs text-faint">{help}</div>}
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {f.source === "ui" && draft[name] !== null && (
+          <button className="btn btn-ghost !p-1.5" title={`Reset to the env/default value (${String(f.default)})`} onClick={() => set(null)}>
+            <RotateCcw size={13} />
+          </button>
+        )}
+        <Toggle checked={value} onChange={(v) => set(v)} />
+      </div>
+    </div>
+  );
+}
+
+function TextSetting({ data, draft, setDraft, name, label, help, placeholder }: Ctx & {
+  name: string; label: string; help?: ReactNode; placeholder?: string;
+}) {
+  const f = data!.fields[name];
+  const pending = name in draft;
+  const value = pending ? (draft[name] === null ? f.default : draft[name]) : f.value;
+  const set = (v: string | null) => setDraft((d) => {
+    const n = { ...d };
+    if (v !== null && v === String(f.value)) delete n[name];
+    else n[name] = v;
+    return n;
+  });
+  return (
+    <Field label={<span className="flex items-center justify-between gap-2">{label}<SourceBadge source={f.source} pending={pending} /></span>} help={help}>
+      <div className="flex items-center gap-1.5">
+        <input className="input flex-1 font-mono text-xs" value={String(value ?? "")} placeholder={placeholder} spellCheck={false}
+          onChange={(e) => set(e.target.value)} />
+        {f.source === "ui" && draft[name] !== null && (
+          <button className="btn btn-ghost !p-2" title="Reset to the env/default value" onClick={() => set(null)}><RotateCcw size={14} /></button>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+function SelectSetting({ data, draft, setDraft, name, label, help, options }: Ctx & {
+  name: string; label: string; help?: ReactNode; options: string[];
+}) {
+  const f = data!.fields[name];
+  const pending = name in draft;
+  const value = String(pending ? (draft[name] === null ? f.default : draft[name]) : f.value).toUpperCase();
+  return (
+    <Field label={<span className="flex items-center justify-between gap-2">{label}<SourceBadge source={f.source} pending={pending} /></span>} help={help}>
+      <div className="flex items-center gap-1.5">
+        <Segmented value={value} onChange={(v) => setDraft((d) => {
+          const n = { ...d };
+          if (v === String(f.value).toUpperCase()) delete n[name];
+          else n[name] = v;
+          return n;
+        })} options={options.map((o) => ({ value: o, label: o.toLowerCase() }))} />
+        {f.source === "ui" && draft[name] !== null && (
+          <button className="btn btn-ghost !p-2" title="Reset to the env/default value" onClick={() => setDraft((d) => ({ ...d, [name]: null }))}>
+            <RotateCcw size={14} />
+          </button>
         )}
       </div>
     </Field>

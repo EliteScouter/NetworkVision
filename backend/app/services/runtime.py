@@ -1,8 +1,11 @@
 """Operational settings that can be changed from the UI without a redeploy.
 
 Precedence (lowest -> highest): built-in default < NV_* environment variable < value
-saved in the UI. "Reset" in the UI deletes the saved value, so the env var (or the
-built-in default) applies again. Saved values live in the ``settings`` table: plain
+saved in the UI. Effective values are written onto the shared Settings object, so
+every ``get_settings().x`` sees a UI change immediately - no per-feature wiring.
+Only bootstrap values (database, secret key, admin login, ports, paths) stay env-only.
+"Reset" in the UI deletes the saved value, so the env var (or the built-in default)
+applies again. Saved values live in the ``settings`` table: plain
 JSON under ``runtime`` and, for webhook URLs/tokens, an encrypted blob under
 ``runtime_secrets``. Secrets are never returned to the browser, only masked.
 
@@ -13,6 +16,7 @@ Also holds per-device alert tuning (``alert_tuning`` table) and maintenance wind
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import time
@@ -33,10 +37,19 @@ log = logging.getLogger("networkvision.runtime")
 
 THRESHOLDS = ["alert_cpu_pct", "alert_mem_pct", "alert_temp_c", "alert_latency_ms", "alert_loss_pct",
               "alert_if_util_pct", "alert_if_errors_per_min", "alert_consecutive"]
-RETENTION = ["retention_days_metrics", "retention_days_rollup", "retention_days_logs", "retention_days_alerts"]
+RETENTION = ["retention_days_metrics", "retention_days_rollup", "retention_days_logs", "retention_days_alerts",
+             "retention_days_firewall", "retention_days_security"]
 NOTIFY = ["notify_min_severity"]
-SECRETS = ["notify_webhook_url", "notify_discord_webhook_url", "notify_slack_webhook_url", "notify_ntfy_url", "notify_ntfy_token"]
-EDITABLE = THRESHOLDS + RETENTION + NOTIFY + SECRETS
+GENERAL = ["poll_interval", "metrics_persist_interval", "log_level"]
+FIREWALL = ["firewall_enabled", "firewall_store_pass", "firewall_store_noise", "firewall_keep_raw_logs"]
+SECURITY = ["sec_enabled", "sec_bruteforce_failures", "sec_bruteforce_window_min", "sec_scan_ports", "sec_scan_hosts",
+            "sec_scan_window_min", "sec_scan_alert_blocked", "sec_wan_spike_factor", "sec_wan_spike_min", "sec_ignore_ips"]
+DHCP = ["dhcp_enabled", "dhcp_mac_max_ips", "dhcp_learning_hours", "dhcp_scope_warn_pct", "dhcp_scope_crit_pct"]
+SECRETS = ["notify_webhook_url", "notify_discord_webhook_url", "notify_slack_webhook_url", "notify_ntfy_url", "notify_ntfy_token",
+           "geoip_license_key"]
+NON_URL_SECRETS = {"notify_ntfy_token", "geoip_license_key"}
+EDITABLE = THRESHOLDS + RETENTION + NOTIFY + GENERAL + FIREWALL + SECURITY + DHCP + SECRETS
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 SEVERITIES = ("info", "warning", "critical")
 
 # Short names used for per-device threshold overrides -> global setting.
@@ -70,9 +83,22 @@ def validate(name: str, value: Any) -> Any:
         if value not in SEVERITIES:
             raise ValueError("min severity must be info, warning or critical")
         return value
+    if name == "log_level":
+        v = str(value or "").upper()
+        if v not in LOG_LEVELS:
+            raise ValueError(f"log level must be one of {', '.join(LOG_LEVELS)}")
+        return v
+    if name == "sec_ignore_ips":
+        parts = [p.strip() for p in str(value or "").replace("\n", ",").split(",") if p.strip()]
+        for p in parts:
+            try:
+                ipaddress.ip_network(p, strict=False)
+            except ValueError:
+                raise ValueError(f"not an IP or CIDR: {p}") from None
+        return ", ".join(parts)
     if name in SECRETS:
         v = str(value or "").strip()
-        if v and name != "notify_ntfy_token" and not v.startswith(("http://", "https://")):
+        if v and name not in NON_URL_SECRETS and not v.startswith(("http://", "https://")):
             raise ValueError("must be an http(s) URL")
         if len(v) > 2048:
             raise ValueError("too long")
@@ -165,6 +191,13 @@ def window_dict(w: MaintenanceWindow, now: float | None = None) -> dict[str, Any
     }
 
 
+def _kind(name: str) -> str:
+    if name in SECRETS:
+        return "secret"
+    ann = Settings.model_fields[name].annotation
+    return {bool: "bool", int: "int", float: "float"}.get(ann, "str")
+
+
 class RuntimeSettings:
     def __init__(self) -> None:
         self.overrides: dict[str, Any] = {}
@@ -174,6 +207,7 @@ class RuntimeSettings:
         self.windows: list[MaintenanceWindow] = []
         self.secrets_corrupt = False
         self._lock = asyncio.Lock()
+        self._base: tuple[Any, dict[str, Any]] | None = None  # (settings object, its env/default values)
 
     # ------------------------------------------------------------- loading
     async def load(self) -> None:
@@ -204,6 +238,25 @@ class RuntimeSettings:
         self.secrets = {k: v for k, v in (sec or {}).items() if k in SECRETS}
         self.tuning = {t.device_id: t for t in tuning}
         self.windows = list(windows)
+        self.apply()
+
+    def _env_values(self) -> dict[str, Any]:
+        s = get_settings()
+        if self._base is None or self._base[0] is not s:  # first use, or settings were reloaded
+            self._base = (s, {n: getattr(s, n) for n in EDITABLE})
+        return self._base[1]
+
+    def apply(self) -> None:
+        """Write the effective values onto the shared Settings object and run side effects."""
+        s, base = get_settings(), self._env_values()
+        before = {n: getattr(s, n) for n in EDITABLE}
+        for n in EDITABLE:
+            object.__setattr__(s, n, self.secrets[n] if n in self.secrets else self.overrides.get(n, base[n]))
+        logging.getLogger().setLevel(s.log_level.upper())
+        if s.geoip_license_key != before["geoip_license_key"]:
+            from .geoip import geoip  # local import: geoip -> config only, never back here
+
+            geoip.kick()
 
     # ------------------------------------------------------------- reading
     def get(self, name: str) -> Any:
@@ -211,7 +264,7 @@ class RuntimeSettings:
             return self.secrets[name]
         if name in self.overrides:
             return self.overrides[name]
-        return getattr(get_settings(), name)
+        return self._env_values()[name] if name in EDITABLE else getattr(get_settings(), name)
 
     def source(self, name: str) -> str:
         if name in self.secrets or name in self.overrides:
@@ -219,7 +272,7 @@ class RuntimeSettings:
         return "env" if name in get_settings().model_fields_set else "default"
 
     def env_value(self, name: str) -> Any:
-        return getattr(get_settings(), name)
+        return self._env_values()[name] if name in EDITABLE else getattr(get_settings(), name)
 
     def threshold(self, name: str, device_id: int | None = None) -> float:
         if device_id is not None and (t := self.tuning.get(device_id)) is not None:
@@ -264,7 +317,7 @@ class RuntimeSettings:
             fields[name] = {
                 "value": (SECRET_MASK if val else "") if secret else val,
                 "default": (SECRET_MASK if env else "") if secret else env,
-                "source": self.source(name), "secret": secret,
+                "source": self.source(name), "secret": secret, "type": _kind(name),
             }
         return {"fields": fields, "disabled_rules": sorted(self.disabled_rules), "rules": RULES,
                 "secrets_corrupt": self.secrets_corrupt}
@@ -289,6 +342,7 @@ class RuntimeSettings:
         await self._save(overrides, secrets, rules)
         self.overrides, self.secrets, self.disabled_rules = overrides, secrets, rules
         self.secrets_corrupt = False
+        self.apply()
 
     async def _save(self, overrides: dict[str, Any], secrets: dict[str, str], rules: set[str]) -> None:
         plain = json.dumps({"values": overrides, "disabled_rules": sorted(rules)})

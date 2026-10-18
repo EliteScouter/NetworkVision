@@ -9,6 +9,7 @@ Without either, everything still works - countries are simply not shown.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import io
 import logging
@@ -39,6 +40,13 @@ class GeoIP:
         self.source = "none"
         #: Why the automatic download isn't working (shown in the UI); None when fine or not configured.
         self.error: str | None = None
+        self._kick: asyncio.Event | None = None  # created inside maintain(): bound to the running loop
+
+    def kick(self) -> None:
+        """The license key changed (Settings page): try a download now."""
+        self.error = None
+        if self._kick is not None:
+            self._kick.set()
 
     @property
     def path(self) -> Path:
@@ -87,19 +95,22 @@ class GeoIP:
     async def maintain(self) -> None:
         """Download/refresh the database when a license key is configured."""
         self.open()
-        key = get_settings().geoip_license_key
-        if not key:
-            return
+        self._kick = kick = asyncio.Event()
         while True:
+            key = get_settings().geoip_license_key
             age = time.time() - self.path.stat().st_mtime if self.path.exists() else None
             ok = True
-            if age is None or age > REFRESH_SECONDS:
+            forced = kick.is_set()
+            kick.clear()
+            if key and (forced or age is None or age > REFRESH_SECONDS):
                 try:
                     ok = await self._download(key)
                 except Exception as e:  # noqa: BLE001 - keep the loop alive
                     log.warning("GeoIP download failed: %s", type(e).__name__)
                     self.error, ok = f"GeoIP download failed ({type(e).__name__}).", False
-            await asyncio.sleep(86400 if ok else 3600)  # retry hourly while broken
+            # Daily refresh check; hourly retries while broken; a key change in Settings wakes it at once.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(kick.wait(), timeout=86400 if ok and key else 3600)
 
     async def _download(self, key: str) -> bool:
         params = {"edition_id": "GeoLite2-Country", "license_key": key, "suffix": "tar.gz"}

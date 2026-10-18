@@ -199,8 +199,11 @@ devices you recognize as **Known** on the *DHCP* page. "New device" alerts start
 
 ## Configuration
 
-Everything is configured with `NV_*` environment variables. See [`.env.example`](.env.example) for the full,
-documented list: auth, database, retention, alert thresholds and notifications.
+Day-to-day settings live in the web UI (**Settings**): polling, log level, GeoIP key, alert thresholds and rules,
+firewall log storage, threat detection, DHCP insights, retention and notifications. Changes apply immediately, no
+restart. `NV_*` environment variables set the starting values (and anything saved in the UI overrides them; "reset"
+goes back to the env value). Only bootstrap settings are env-only: secret key, admin login, database, ports and
+paths. See [`.env.example`](.env.example) for the full, documented list.
 
 | Variable | Default | |
 |---|---|---|
