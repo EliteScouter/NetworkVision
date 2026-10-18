@@ -119,7 +119,7 @@ def test_settings_tuning_and_maintenance_api(client):
     assert client.post("/api/settings/test-notification").status_code == 400  # nothing configured
     r = client.put("/api/settings", json={"values": {"alert_cpu_pct": 75, "notify_ntfy_url": "https://ntfy.example/secret-topic"}})
     assert r.status_code == 200 and "secret-topic" not in r.text
-    assert r.json()["fields"]["alert_cpu_pct"] == {"value": 75, "default": 90, "source": "ui", "secret": False}
+    assert r.json()["fields"]["alert_cpu_pct"] == {"value": 75, "default": 90, "source": "ui", "secret": False, "type": "float"}
     assert r.json()["channels"] == ["ntfy"]
     assert client.put("/api/settings", json={"values": {"retention_days_logs": 0}}).status_code == 422
     client.put("/api/settings", json={"values": {"alert_cpu_pct": None, "notify_ntfy_url": None}})
@@ -211,3 +211,23 @@ def test_manual_internet_link(client):
     assert client.delete(f"/api/links/internet/{sw['id']}").status_code == 204
     assert inet_edge() is None
     assert client.delete(f"/api/links/internet/{sw['id']}").status_code == 404
+
+
+def test_ui_settings_apply_everywhere(client):
+    from app.config import get_settings
+
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "pw-for-tests"}).status_code == 200
+    fields = client.get("/api/settings").json()["fields"]
+    assert fields["firewall_keep_raw_logs"]["type"] == "bool" and fields["geoip_license_key"]["type"] == "secret"
+    assert get_settings().firewall_keep_raw_logs is True
+    r = client.put("/api/settings", json={"values": {"firewall_keep_raw_logs": False, "sec_ignore_ips": "10.0.0.0/8,192.168.1.5",
+                                                     "log_level": "warning", "geoip_license_key": "abc_mmk"}})
+    assert r.status_code == 200, r.text
+    s = get_settings()  # the same object every module reads: no restart, no per-feature wiring
+    assert s.firewall_keep_raw_logs is False and s.sec_ignore_ips == "10.0.0.0/8, 192.168.1.5" and s.log_level == "WARNING"
+    assert s.geoip_license_key == "abc_mmk" and "abc_mmk" not in r.text
+    assert client.put("/api/settings", json={"values": {"sec_ignore_ips": "not-an-ip"}}).status_code >= 400
+    r = client.put("/api/settings", json={"values": {"firewall_keep_raw_logs": None, "sec_ignore_ips": None, "log_level": None,
+                                                     "geoip_license_key": None}})
+    assert r.status_code == 200
+    assert s.firewall_keep_raw_logs is True and s.sec_ignore_ips == "" and r.json()["fields"]["log_level"]["source"] != "ui"
