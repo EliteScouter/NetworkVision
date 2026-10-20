@@ -17,8 +17,9 @@ import {
   Users,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { AlertDrawer } from "../components/AlertDrawer";
 import { SlideList } from "../components/SlideList";
 import { AreaChart, Gauge, Sparkline } from "../components/charts";
 import { DeviceIcon } from "../components/DeviceIcon";
@@ -28,7 +29,7 @@ import { ago, bps, bpsParts, clock, deviceColor, fmtUptime, ms, SEV_NAMES, sevCo
 import { useHistory } from "../components/HistoryExplorer";
 import { useApi, useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
-import type { LogItem, Overview, ServicesResponse, SpeedStatus, Topology } from "../lib/types";
+import type { Alert, LogItem, Overview, ServicesResponse, SpeedStatus, Topology } from "../lib/types";
 
 function Kpi({ icon: Icon, label, children, sub, tone = "#22d3ee", delay = 0, to }: {
   icon: LucideIcon;
@@ -103,6 +104,7 @@ export default function OverviewPage() {
   const logs = useLive((s) => s.logs);
   const alerts = useLive((s) => s.alerts);
   const nav = useNavigate();
+  const [openAlert, setOpenAlert] = useState<Alert | null>(null);
   useTick(5000);
 
   const activeAlerts = useMemo(
@@ -194,7 +196,7 @@ export default function OverviewPage() {
           <AnimatePresence initial={false}>
             {activeAlerts.slice(0, 30).map((a) => (
               <motion.button key={a.id} layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
-                onClick={() => (a.device_id ? nav(`/devices/${a.device_id}`) : a.key.startsWith("svc:") && nav("/services"))}
+                onClick={() => setOpenAlert(a)}
                 className={clsx("relative w-full overflow-hidden rounded-xl border bg-black/20 p-3 text-left transition hover:bg-white/[0.03]",
                   a.severity === "critical" ? "border-crit/30" : a.severity === "warning" ? "border-warn/25" : "border-edge")}>
                 <span className={clsx("absolute inset-y-0 left-0 w-0.5", a.severity === "critical" ? "bg-crit" : a.severity === "warning" ? "bg-warn" : "bg-info")} />
@@ -315,6 +317,7 @@ export default function OverviewPage() {
             )} />
         </div>
       </Panel>
+      <AlertDrawer alert={openAlert} onClose={() => setOpenAlert(null)} />
     </div>
   );
 }

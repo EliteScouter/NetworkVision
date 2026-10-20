@@ -236,7 +236,8 @@ async def log_apps(db: AsyncSession = Depends(get_session)) -> dict:
 # --------------------------------------------------------------------- alerts
 @router.get("/alerts")
 async def get_alerts(state: str = "active", device_id: int | None = None, limit: int = Query(200, le=1000),
-                     db: AsyncSession = Depends(get_session)) -> dict:
+                     key: str | None = Query(None, max_length=255), db: AsyncSession = Depends(get_session)) -> dict:
+    """``key`` (with state=resolved or all) lists earlier occurrences of one alert, for the detail drawer."""
     if state == "active":
         items = [a for a in engine.open.values() if device_id is None or a.device_id == device_id]
         items.sort(key=lambda a: ({"critical": 0, "warning": 1, "info": 2}.get(a.severity, 3), -a.started_at))
@@ -246,6 +247,8 @@ async def get_alerts(state: str = "active", device_id: int | None = None, limit:
         stmt = stmt.where(Alert.resolved_at.is_not(None))
     if device_id is not None:
         stmt = stmt.where(Alert.device_id == device_id)
+    if key:
+        stmt = stmt.where(Alert.key == key)
     rows = (await db.execute(stmt.order_by(Alert.started_at.desc()).limit(limit))).scalars().all()
     return {"items": [alert_dict(a) for a in rows]}
 

@@ -3,36 +3,22 @@ import { Bell, BellOff, Check, CheckCheck, Search, ShieldCheck, SlidersHorizonta
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
+import { AlertDrawer } from "../components/AlertDrawer";
 import { Badge, Empty, Segmented } from "../components/ui";
 import { api } from "../lib/api";
 import { ago, clock, duration } from "../lib/format";
 import { useApi, useTick } from "../lib/hooks";
 import { useLive } from "../lib/store";
 import type { Alert } from "../lib/types";
+import { RULE_LABEL } from "../lib/alerts";
 
-const RULE_LABEL: Record<string, string> = {
-  device_down: "Device down", poll_error: "Integration error", high_cpu: "High CPU", high_mem: "High memory",
-  high_temp: "Temperature", high_latency: "Latency", packet_loss: "Packet loss", gateway_down: "Gateway down",
-  gateway_loss: "Gateway loss", gateway_latency: "Gateway latency", port_flapping: "Port flapping", port_down: "Link down",
-  port_errors: "Port errors", port_saturated: "Saturation", firmware_update: "Firmware", log_event: "Critical log",
-  sec_bruteforce: "Brute force", sec_login_after_failures: "Possible breach", sec_portscan: "Port scan", sec_ids: "IDS",
-  sec_wan_spike: "WAN spike", dhcp_ip_conflict: "IP conflict", dhcp_duplicate_hostname: "Duplicate hostname",
-  dhcp_address_hopping: "Address hopping", dhcp_multiple_servers: "Multiple DHCP servers",
-  dhcp_failover: "DHCP failover unhealthy", dhcp_config_drift: "DHCP config drift", dhcp_scope_full: "DHCP scope nearly full",
-  dhcp_bad_address: "DHCP BAD_ADDRESS", dhcp_static_in_pool: "Static IP in DHCP pool", dhcp_server_overlap: "Overlapping DHCP servers",
-  dhcp_reservation_mismatch: "Reservation mismatch", dhcp_reserved_other: "Reserved IP used by another device", dhcp_unauthorized: "DHCP server not authorized",
-  dhcp_dns_down: "DNS server not answering", dhcp_dns_ad_records: "DC records missing", dhcp_dns_external: "External DNS failing",
-  dhcp_dns_events: "DNS Server log errors", dhcp_dns_mismatch: "DC records differ", dhcp_dns_insecure_updates: "Nonsecure DNS updates",
-  dhcp_dns_stale: "Stale DNS records", dhcp_dns_ptr: "PTR mismatch", dhcp_rogue_server: "Rogue DHCP",
-  dhcp_nak_storm: "DHCPNAK storm", dhcp_new_device: "New device",
-  speedtest_failed: "Speed test", speedtest_slow: "Slow internet",
-};
 
 export default function AlertsPage() {
   const [tab, setTab] = useState<"active" | "history">("active");
   const [sev, setSev] = useState<string[]>([]);
   const [q, setQ] = useState("");
   const [hideAck, setHideAck] = useState(false);
+  const [open, setOpen] = useState<Alert | null>(null);
   const active = useLive((s) => s.alerts);
   const { data: history, reload } = useApi<{ items: Alert[] }>(tab === "history" ? "/alerts" : null, 30000, { state: "resolved", limit: 500 });
   useTick(10000);
@@ -109,7 +95,7 @@ export default function AlertsPage() {
                   {a.suppressed && <Badge tone="violet" className="!normal-case"><Wrench size={10} /> maintenance · not notified</Badge>}
                   {a.acknowledged_at && <Badge tone="ok"><Check size={10} /> ack by {a.acknowledged_by}</Badge>}
                 </div>
-                <div className="mt-1.5 font-medium">{a.title}</div>
+                <button className="mt-1.5 text-left font-medium hover:text-cyan" onClick={() => setOpen(a)} title="Details">{a.title}</button>
                 {a.detail && <div className="text-sm break-all text-dim">{a.detail}</div>}
                 <div className="mt-1 font-mono text-[11px] text-faint">
                   started {clock(a.started_at, true)} · {a.resolved_at ? `lasted ${duration(a.resolved_at - a.started_at)}` : `ongoing for ${duration(Date.now() / 1000 - a.started_at)}`}
@@ -131,6 +117,7 @@ export default function AlertsPage() {
           ))}
         </AnimatePresence>
       </div>
+      <AlertDrawer alert={open} onClose={() => setOpen(null)} />
     </div>
   );
 }
