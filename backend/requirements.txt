@@ -4,7 +4,7 @@ sqlalchemy[asyncio]==2.1.4
 aiosqlite==0.22.1
 aiomysql==0.3.2
 pydantic==2.14.1
-pydantic-settings==2.16.0
+pydantic-settings==2.16.1
 httpx==0.28.1
 pysnmp==7.1.30
 icmplib==3.0.4
